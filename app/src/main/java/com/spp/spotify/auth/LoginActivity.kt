@@ -16,6 +16,8 @@ import kotlinx.coroutines.launch
 class LoginActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityLoginBinding
+    /** Guards against processing the OAuth callback more than once per launch. */
+    private var callbackHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,20 +46,22 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun handleCallback(intent: Intent?) {
+        if (callbackHandled) return
         val uri = intent?.data ?: return
         if (!uri.toString().startsWith(BuildConfig.SPOTIFY_REDIRECT_URI)) return
-        // Clear so we don't handle twice
-        setIntent(Intent())
+
+        callbackHandled = true
 
         val code = uri.getQueryParameter("code")
         val error = uri.getQueryParameter("error")
         when {
-            code != null -> exchangeToken(code)
+            code != null  -> exchangeToken(code)
             error != null -> Toast.makeText(this, "Auth error: $error", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun openSpotifyAuth() {
+        callbackHandled = false
         val authUrl = SpotifyAuthManager.generateAuthUrl()
         try {
             CustomTabsIntent.Builder().build().launchUrl(this, authUrl.toUri())

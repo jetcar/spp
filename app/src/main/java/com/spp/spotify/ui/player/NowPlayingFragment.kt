@@ -100,9 +100,9 @@ class NowPlayingFragment : Fragment() {
         vm.shuffleState.observe(viewLifecycleOwner) { b.btnShuffle.alpha = if (it) 1f else 0.4f }
 
         vm.repeatState.observe(viewLifecycleOwner) { state ->
-            b.btnRepeat.alpha = if (state != "off") 1f else 0.4f
+            b.btnRepeat.alpha = if (state != PlayerViewModel.REPEAT_OFF) 1f else 0.4f
             b.btnRepeat.setImageResource(
-                if (state == "track") R.drawable.ic_repeat_one_24 else R.drawable.ic_repeat_24
+                if (state == PlayerViewModel.REPEAT_TRACK) R.drawable.ic_repeat_one_24 else R.drawable.ic_repeat_24
             )
         }
 

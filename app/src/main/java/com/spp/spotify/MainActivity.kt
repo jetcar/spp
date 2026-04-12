@@ -14,7 +14,6 @@ import com.spp.spotify.auth.LoginActivity
 import com.spp.spotify.auth.TokenManager
 import com.spp.spotify.databinding.ActivityMainBinding
 import com.spp.spotify.ui.player.PlayerViewModel
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {

@@ -18,6 +18,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     companion object {
         private const val POLLING_INTERVAL_MS = 3_000L
         private const val SKIP_FETCH_DELAY_MS = 600L
+
+        const val REPEAT_OFF = "off"
+        const val REPEAT_CONTEXT = "context"
+        const val REPEAT_TRACK = "track"
     }
 
     private val _currentTrack = MutableLiveData<Track?>()
@@ -122,7 +126,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cycleRepeat() {
-        val next = when (_repeatState.value) { "off" -> "context"; "context" -> "track"; else -> "off" }
+        val next = when (_repeatState.value) {
+            REPEAT_OFF     -> REPEAT_CONTEXT
+            REPEAT_CONTEXT -> REPEAT_TRACK
+            else           -> REPEAT_OFF
+        }
         viewModelScope.launch { repo.setRepeat(next).onSuccess { _repeatState.value = next } }
     }
 

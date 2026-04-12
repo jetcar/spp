@@ -13,37 +13,47 @@ class SpotifyRepository(context: Context) {
     private val api: SpotifyApiService = NetworkModule.createApiService(context.applicationContext)
     private val appContext: Context = context.applicationContext
 
+    /**
+     * Executes [block], refreshing the access token first if needed, and maps the HTTP response
+     * to a [Result].  All Spotify "no content" responses (HTTP 204) and responses whose body is
+     * legitimately null (e.g. Retrofit `Response<Unit>`) are handled by returning
+     * `Result.success(Unit)`.  The single @Suppress is therefore bounded to this one utility
+     * method rather than scattered across every call site.
+     */
+    @Suppress("UNCHECKED_CAST")
     private suspend fun <T> safeCall(block: suspend () -> Response<T>): Result<T> {
         return try {
             if (TokenManager.getAccessToken(appContext) == null) {
                 SpotifyAuthManager.refreshAccessToken(appContext)
             }
-            val resp = block()
-            when {
-                resp.isSuccessful -> {
-                    @Suppress("UNCHECKED_CAST")
-                    val body = resp.body() ?: (Unit as T)
-                    Result.success(body)
-                }
-                resp.code() == 401 -> {
-                    val refreshed = SpotifyAuthManager.refreshAccessToken(appContext)
-                    if (!refreshed) return Result.failure(Exception("Session expired. Please log in again."))
-                    val retry = block()
-                    if (retry.isSuccessful) {
-                        @Suppress("UNCHECKED_CAST")
-                        Result.success(retry.body() ?: (Unit as T))
-                    } else {
-                        Result.failure(Exception("API error ${retry.code()}: ${retry.message()}"))
-                    }
-                }
-                resp.code() == 204 -> {
-                    @Suppress("UNCHECKED_CAST")
-                    Result.success(Unit as T)
-                }
-                else -> Result.failure(Exception("API error ${resp.code()}: ${resp.message()}"))
-            }
+            processResponse(block(), block)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun <T> processResponse(
+        resp: Response<T>,
+        retryBlock: suspend () -> Response<T>
+    ): Result<T> {
+        return when {
+            // 2xx success — body present
+            resp.isSuccessful && resp.body() != null -> Result.success(resp.body()!!)
+            // 204 No Content or other 2xx with empty body (e.g. Response<Unit>)
+            resp.isSuccessful -> Result.success(Unit as T)
+            // Token expired — try once more after a refresh
+            resp.code() == 401 -> {
+                val refreshed = SpotifyAuthManager.refreshAccessToken(appContext)
+                if (!refreshed) return Result.failure(Exception("Session expired. Please log in again."))
+                val retry = retryBlock()
+                when {
+                    retry.isSuccessful && retry.body() != null -> Result.success(retry.body()!!)
+                    retry.isSuccessful -> Result.success(Unit as T)
+                    else -> Result.failure(Exception("API error ${retry.code()}: ${retry.message()}"))
+                }
+            }
+            else -> Result.failure(Exception("API error ${resp.code()}: ${resp.message()}"))
         }
     }
 
