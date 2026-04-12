@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SPP" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/spotify_green</item>
+        <item name="colorPrimaryVariant">@color/colorPrimaryDark</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/spotify_green</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="android:windowBackground">@color/spotify_black</item>
+        <item name="android:statusBarColor">@color/spotify_black</item>
+        <item name="android:navigationBarColor">@color/spotify_black</item>
+    </style>
+
+    <style name="Theme.SPP.Login" parent="Theme.SPP">
+        <item name="android:windowBackground">@color/spotify_black</item>
+    </style>
+</resources>
