@@ -15,6 +15,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     private val repo = SpotifyRepository(application)
 
+    companion object {
+        private const val SEARCH_DEBOUNCE_MS = 300L
+    }
+
     private val _categories = MutableLiveData<List<Category>>()
     val categories: LiveData<List<Category>> = _categories
 
@@ -38,7 +42,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         if (query.isBlank()) { clearSearch(); return }
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            delay(300)
+            delay(SEARCH_DEBOUNCE_MS)
             _isLoading.value = true
             repo.search(query)
                 .onSuccess { _results.value = it }

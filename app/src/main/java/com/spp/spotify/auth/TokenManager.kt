@@ -14,6 +14,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 object TokenManager {
 
+    private const val TOKEN_REFRESH_BUFFER_MS = 60_000L
+
     private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
     private val REFRESH_TOKEN_KEY = stringPreferencesKey("refresh_token")
     private val TOKEN_EXPIRY_KEY = longPreferencesKey("token_expiry")
@@ -35,7 +37,7 @@ object TokenManager {
         val prefs = context.dataStore.data.first()
         val token = prefs[ACCESS_TOKEN_KEY]
         val expiry = prefs[TOKEN_EXPIRY_KEY] ?: 0L
-        return if (token != null && System.currentTimeMillis() < expiry - 60_000L) token else null
+        return if (token != null && System.currentTimeMillis() < expiry - TOKEN_REFRESH_BUFFER_MS) token else null
     }
 
     suspend fun getRefreshToken(context: Context): String? =

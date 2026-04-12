@@ -15,6 +15,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val repo = SpotifyRepository(application)
 
+    companion object {
+        private const val POLLING_INTERVAL_MS = 3_000L
+        private const val SKIP_FETCH_DELAY_MS = 600L
+    }
+
     private val _currentTrack = MutableLiveData<Track?>()
     val currentTrack: LiveData<Track?> = _currentTrack
 
@@ -46,7 +51,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         pollJob = viewModelScope.launch {
             while (isActive) {
                 fetchState()
-                delay(3000)
+                delay(POLLING_INTERVAL_MS)
             }
         }
     }
@@ -98,11 +103,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun skipToNext() {
-        viewModelScope.launch { repo.skipToNext().onSuccess { delay(600); fetchState() } }
+        viewModelScope.launch { repo.skipToNext().onSuccess { delay(SKIP_FETCH_DELAY_MS); fetchState() } }
     }
 
     fun skipToPrevious() {
-        viewModelScope.launch { repo.skipToPrevious().onSuccess { delay(600); fetchState() } }
+        viewModelScope.launch { repo.skipToPrevious().onSuccess { delay(SKIP_FETCH_DELAY_MS); fetchState() } }
     }
 
     fun seekToPosition(ms: Long) {
