@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">SPP</string>
+    <string name="home">Home</string>
+    <string name="search">Search</string>
+    <string name="your_library">Your Library</string>
+    <string name="recently_played">Recently Played</string>
+    <string name="featured_playlists">Featured Playlists</string>
+    <string name="new_releases">New Releases</string>
+    <string name="browse_categories">Browse Categories</string>
+    <string name="playlists">Playlists</string>
+    <string name="albums">Albums</string>
+    <string name="liked_songs">Liked Songs</string>
+    <string name="login_with_spotify">LOG IN WITH SPOTIFY</string>
+    <string name="millions_of_songs">Millions of songs.\nFree on Spotify.</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="search_hint">Artists, songs, or podcasts</string>
+    <string name="version_label">SPP v%s</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_message">Version %s is available. Would you like to download it?</string>
+    <string name="update_download">Download</string>
+    <string name="update_dismiss">Later</string>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="bottom_nav_height">56dp</dimen>
+    <dimen name="mini_player_height">64dp</dimen>
+    <dimen name="card_corner_radius">8dp</dimen>
+    <dimen name="playlist_card_size">160dp</dimen>
+    <dimen name="album_card_size">150dp</dimen>
+    <dimen name="genre_card_height">100dp</dimen>
+</resources>
