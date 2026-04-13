@@ -7,6 +7,8 @@ import androidx.fragment.app.activityViewModels
 import androidx.fragment.app.viewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.tabs.TabLayout
+import com.spp.spotify.BuildConfig
+import com.spp.spotify.R
 import com.spp.spotify.databinding.FragmentLibraryBinding
 import com.spp.spotify.ui.adapter.AlbumAdapter
 import com.spp.spotify.ui.adapter.PlaylistAdapter
@@ -50,6 +52,8 @@ class LibraryFragment : Fragment() {
         vm.albums.observe(viewLifecycleOwner)      { albumAdapter.submitList(it) }
         vm.likedTracks.observe(viewLifecycleOwner) { trackAdapter.submitList(it) }
         vm.isLoading.observe(viewLifecycleOwner)   { b.progressBar.visibility = if (it) View.VISIBLE else View.GONE }
+
+        b.tvVersion.text = getString(R.string.version_label, BuildConfig.VERSION_NAME)
     }
 
     override fun onDestroyView() { super.onDestroyView(); _b = null }

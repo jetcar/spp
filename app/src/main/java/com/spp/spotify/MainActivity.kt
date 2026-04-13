@@ -1,6 +1,7 @@
 package com.spp.spotify
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import androidx.activity.viewModels
@@ -10,10 +11,12 @@ import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.setupWithNavController
 import com.bumptech.glide.Glide
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.spp.spotify.auth.LoginActivity
 import com.spp.spotify.auth.TokenManager
 import com.spp.spotify.databinding.ActivityMainBinding
 import com.spp.spotify.ui.player.PlayerViewModel
+import com.spp.spotify.update.UpdateChecker
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -31,6 +34,7 @@ class MainActivity : AppCompatActivity() {
                 return@launch
             }
             initUI()
+            checkForUpdate()
         }
     }
 
@@ -88,5 +92,27 @@ class MainActivity : AppCompatActivity() {
         }
 
         playerViewModel.startPolling()
+    }
+
+    private fun checkForUpdate() {
+        lifecycleScope.launch {
+            UpdateChecker.checkForUpdate(BuildConfig.VERSION_NAME)
+                .onSuccess { info ->
+                    if (info.isUpdateAvailable && !isFinishing) {
+                        showUpdateDialog(info.latestVersion, info.apkDownloadUrl ?: info.releaseUrl)
+                    }
+                }
+        }
+    }
+
+    private fun showUpdateDialog(newVersion: String, downloadUrl: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.update_available_title))
+            .setMessage(getString(R.string.update_available_message, newVersion))
+            .setPositiveButton(getString(R.string.update_download)) { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)))
+            }
+            .setNegativeButton(getString(R.string.update_dismiss), null)
+            .show()
     }
 }

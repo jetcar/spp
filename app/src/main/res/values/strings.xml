@@ -14,4 +14,9 @@
     <string name="millions_of_songs">Millions of songs.\nFree on Spotify.</string>
     <string name="now_playing">Now Playing</string>
     <string name="search_hint">Artists, songs, or podcasts</string>
+    <string name="version_label">SPP v%s</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_message">Version %s is available. Would you like to download it?</string>
+    <string name="update_download">Download</string>
+    <string name="update_dismiss">Later</string>
 </resources>
