@@ -13,4 +13,5 @@
     <color name="colorPrimary">#1DB954</color>
     <color name="colorPrimaryDark">#158a3e</color>
     <color name="colorAccent">#1DB954</color>
+    <color name="color_logout_red">#C62828</color>
 </resources>

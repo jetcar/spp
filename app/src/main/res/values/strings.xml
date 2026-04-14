@@ -19,4 +19,11 @@
     <string name="update_available_message">Version %s is available. Would you like to download it?</string>
     <string name="update_download">Download</string>
     <string name="update_dismiss">Later</string>
+    <string name="profile">Profile</string>
+    <string name="logout">Log Out</string>
+    <string name="logout_confirm_title">Log out?</string>
+    <string name="logout_confirm_message">You will need to sign in again to use SPP.</string>
+    <string name="logout_confirm_yes">Log Out</string>
+    <string name="followers_label">Followers</string>
+    <string name="plan_label">Plan</string>
 </resources>

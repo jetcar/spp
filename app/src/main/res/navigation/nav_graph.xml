@@ -19,4 +19,8 @@
     <fragment android:id="@+id/nowPlayingFragment"
         android:name="com.spp.spotify.ui.player.NowPlayingFragment"
         android:label="Now Playing" />
+
+    <fragment android:id="@+id/profileFragment"
+        android:name="com.spp.spotify.ui.profile.ProfileFragment"
+        android:label="Profile" />
 </navigation>
