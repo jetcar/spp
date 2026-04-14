@@ -3,6 +3,13 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Load local.properties for development builds (never committed to source control)
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+
 android {
     namespace 'com.spp.spotify'
     compileSdk 34
@@ -14,9 +21,10 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        // Set SPOTIFY_CLIENT_ID in local.properties (spotify.clientId=<your_id>)
-        // or replace the placeholder below for development builds only.
-        buildConfigField "String", "SPOTIFY_CLIENT_ID", "\"YOUR_SPOTIFY_CLIENT_ID\""
+        // SPOTIFY_CLIENT_ID: set via GitHub Secret in CI, or spotify.clientId in local.properties for dev
+        def spotifyClientId = System.getenv("SPOTIFY_CLIENT_ID")
+                ?: localProperties.getProperty("spotify.clientId", "")
+        buildConfigField "String", "SPOTIFY_CLIENT_ID", "\"${spotifyClientId}\""
         buildConfigField "String", "SPOTIFY_REDIRECT_URI", "\"spp://callback\""
         buildConfigField "String", "GITHUB_OWNER", "\"jetcar\""
         buildConfigField "String", "GITHUB_REPO", "\"spp\""

@@ -161,8 +161,16 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
+      - name: Validate Spotify credentials
+        shell: bash
+        run: test -n "$SPOTIFY_CLIENT_ID"
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+
       - name: Build release APK
         run: ./gradlew --no-daemon assembleRelease
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
 
       - name: Rename APK
         run: |

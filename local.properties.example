@@ -1,0 +1,9 @@
+## Copy this file to local.properties (already in .gitignore) and fill in your values.
+## local.properties is used for local development only — never commit it.
+
+# Android SDK path (required by Android build tools)
+sdk.dir=/path/to/Android/sdk
+
+# Spotify application credentials (https://developer.spotify.com/dashboard)
+# Only the client ID is needed — this app uses PKCE flow (no client secret in the APK)
+spotify.clientId=YOUR_SPOTIFY_CLIENT_ID
