@@ -1,84 +1,28 @@
-# SPP – Spotify++
+# Spotify WebView Android
 
-An Android Spotify client built with Kotlin, MVVM architecture, and the Spotify Web API.
+Android app that opens Spotify Web Player (`https://open.spotify.com/`) inside a `WebView` using the same pattern as the component style in your `vidrox` project (`AndroidView` + helper `WebViewClient` + request logging).
 
-## Features
+## Project Structure
 
-- **Login** – Spotify PKCE OAuth2 via Chrome Custom Tabs
-- **Home** – Recently Played, Featured Playlists, New Releases
-- **Search** – Browse categories grid + search results (tracks / albums / playlists)
-- **Library** – Playlists, Albums, Liked Songs tabs
-- **Now Playing** – Album art with Palette-based background, full playback controls, seek bar, like/shuffle/repeat
-- **Mini Player** – Persistent mini player bar above the bottom navigation
+- `app/src/main/java/com/spp/spotify/ui/WebPlayerScreen.kt`: Compose screen hosting `WebView`.
+- `app/src/main/java/com/spp/spotify/ui/WebViewSupport.kt`: WebView setup, protected media permission handling, and request logging.
+- `app/src/main/java/com/spp/spotify/MainActivity.kt`: Entry point.
 
-## Prerequisites
+## Run
 
-- Android Studio Hedgehog (2023.1.1) or newer
-- JDK 17
-- Android SDK with API 34 (compileSdk) and API 26 (minSdk)
-- A Spotify Developer account
-
-## Spotify Developer Setup
-
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
-2. Create a new app (or use an existing one).
-3. Under **Edit Settings**, add `spp://callback` as a **Redirect URI**.
-4. Copy your **Client ID**.
-
-## Configuration
-
-1. Open `app/build.gradle`.
-2. Replace `YOUR_SPOTIFY_CLIENT_ID` with your actual Client ID:
-   ```groovy
-   buildConfigField "String", "SPOTIFY_CLIENT_ID", "\"<your_client_id_here>\""
-   ```
-
-## Building
-
-```bash
-# Clone the repo (if not already done)
-git clone https://github.com/<your-org>/spp.git
-cd spp
-
-# Build debug APK
-./gradlew assembleDebug
-
-# Install on a connected device / emulator
-./gradlew installDebug
-```
-
-## Architecture
-
-```
-com.spp.spotify
-├── auth/               # PKCE auth flow, TokenManager (DataStore)
-├── data/
-│   ├── api/            # Retrofit services, OkHttp interceptor
-│   ├── model/          # Kotlin data classes (Spotify models)
-│   └── repository/     # SpotifyRepository (single source of truth)
-└── ui/
-    ├── adapter/        # RecyclerView ListAdapters
-    ├── home/           # HomeFragment + HomeViewModel
-    ├── library/        # LibraryFragment + LibraryViewModel
-    ├── player/         # NowPlayingFragment + PlayerViewModel
-    └── search/         # SearchFragment + SearchViewModel
-```
-
-## Tech Stack
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| Kotlin | 1.9.10 | Language |
-| AGP | 8.1.4 | Build tooling |
-| Retrofit 2 | 2.9.0 | HTTP client |
-| OkHttp | 4.12.0 | HTTP engine |
-| Glide | 4.16.0 | Image loading |
-| Navigation Component | 2.7.6 | Fragment navigation |
-| DataStore Preferences | 1.0.0 | Token persistence |
-| Palette KTX | 1.0.0 | Dynamic album art colors |
-| Chrome Custom Tabs | 1.7.0 | OAuth login browser |
+1. Open project in Android Studio.
+2. Sync Gradle.
+3. Run the `app` module on a device or emulator.
 
 ## Notes
 
-- The app targets the **Spotify Web API** for playback control; a **Spotify Premium** account is required for playback commands.
-- Token refresh is handled transparently by `SpotifyRepository.safeCall()`.
+- The app configures the `WebView` with a desktop-style Chrome user agent, popup hand-off, third-party cookies, and protected-media permission handling to maximize Spotify Web Player compatibility.
+- This implementation attempts to render Spotify web like a browser, but playback support can still be limited by WebView DRM/browser capability restrictions from Spotify.
+- URL, request, console, and media-permission logs are available in Logcat with tag `SpotifyWV`.
+
+## Quick Troubleshooting
+
+1. Update Android System WebView from Play Store on the device.
+2. Use email/password login inside the page when possible; many third-party OAuth providers deliberately limit embedded WebView sign-in flows.
+3. Check Logcat (`SpotifyWV`) for blocked protected-media requests, popup redirects, or web console errors.
+4. If the site still refuses playback, this is likely an enforced Spotify limitation for embedded/in-app browsers; use Spotify Android SDK/App Remote for production playback.
