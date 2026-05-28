@@ -93,7 +93,7 @@ fun WebPlayerScreen() {
     // Managed here (not in MainActivity) so we have direct access to webViewRef
     // and can actually pause/resume audio when focus changes.
     DisposableEffect(Unit) {
-        val audioManager = context.getSystemService(AudioManager::class.java)
+        val focusAudioManager = context.getSystemService(AudioManager::class.java)
 
         val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(
@@ -115,10 +115,10 @@ fun WebPlayerScreen() {
             }
             .build()
 
-        audioManager.requestAudioFocus(focusRequest)
+        focusAudioManager.requestAudioFocus(focusRequest)
 
         onDispose {
-            audioManager.abandonAudioFocusRequest(focusRequest)
+            focusAudioManager.abandonAudioFocusRequest(focusRequest)
         }
     }
 
@@ -127,6 +127,14 @@ fun WebPlayerScreen() {
         while (isActive) {
             delay(2_000)
             webViewRef.value?.queryIsPlaying { playing -> isPlaying.value = playing }
+        }
+    }
+
+    // Periodically check for and skip Spotify ads
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(1_500)
+            webViewRef.value?.skipAdIfPresent()
         }
     }
 

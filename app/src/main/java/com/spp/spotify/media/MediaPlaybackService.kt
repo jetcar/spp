@@ -12,6 +12,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
 import com.spp.spotify.MainActivity
@@ -104,8 +105,9 @@ class MediaPlaybackService : Service() {
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
                 .build(),
         )
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_ID, buildNotification(isPlaying, title, artist))
+        // Update via startForeground so the notification is treated as a
+        // foreground-service notification — exempt from POST_NOTIFICATIONS check.
+        startForeground(NOTIF_ID, buildNotification(isPlaying, title, artist))
     }
 
     // ------------------------------------------------------------------
@@ -154,26 +156,34 @@ class MediaPlaybackService : Service() {
                     .setShowActionsInCompactView(0, 1, 2),
             )
             .addAction(
-                android.R.drawable.ic_media_previous,
-                "Previous",
-                MediaButtonReceiver.buildMediaButtonPendingIntent(
-                    this, PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS,
-                ),
+                NotificationCompat.Action.Builder(
+                    IconCompat.createWithResource(this, R.drawable.ic_media_previous),
+                    "Previous",
+                    MediaButtonReceiver.buildMediaButtonPendingIntent(
+                        this, PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS,
+                    ),
+                ).build(),
             )
             .addAction(
-                if (isPlaying) android.R.drawable.ic_media_pause
-                else          android.R.drawable.ic_media_play,
-                if (isPlaying) "Pause" else "Play",
-                MediaButtonReceiver.buildMediaButtonPendingIntent(
-                    this, PlaybackStateCompat.ACTION_PLAY_PAUSE,
-                ),
+                NotificationCompat.Action.Builder(
+                    IconCompat.createWithResource(
+                        this,
+                        if (isPlaying) R.drawable.ic_media_pause else R.drawable.ic_media_play,
+                    ),
+                    if (isPlaying) "Pause" else "Play",
+                    MediaButtonReceiver.buildMediaButtonPendingIntent(
+                        this, PlaybackStateCompat.ACTION_PLAY_PAUSE,
+                    ),
+                ).build(),
             )
             .addAction(
-                android.R.drawable.ic_media_next,
-                "Next",
-                MediaButtonReceiver.buildMediaButtonPendingIntent(
-                    this, PlaybackStateCompat.ACTION_SKIP_TO_NEXT,
-                ),
+                NotificationCompat.Action.Builder(
+                    IconCompat.createWithResource(this, R.drawable.ic_media_next),
+                    "Next",
+                    MediaButtonReceiver.buildMediaButtonPendingIntent(
+                        this, PlaybackStateCompat.ACTION_SKIP_TO_NEXT,
+                    ),
+                ).build(),
             )
             .build()
     }

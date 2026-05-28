@@ -32,6 +32,14 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        jniLibs {
+            // This library cannot be stripped by the NDK tool (already stripped
+            // or non-standard format); tell AGP to skip it instead of warning.
+            keepDebugSymbols += "**/libandroidx.graphics.path.so"
+        }
+    }
 }
 
 dependencies {

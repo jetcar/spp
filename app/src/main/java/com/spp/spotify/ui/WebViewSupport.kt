@@ -245,6 +245,50 @@ internal fun WebView.pauseAllMedia() {
 
 
 // ---------------------------------------------------------------------------
+// Ad-skip bridge helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempts to skip the current Spotify ad.
+ *
+ * Strategy (in order):
+ * 1. Click `[data-testid="skip-ad-button"]` if it exists (skippable ad).
+ * 2. If an ad label is detected but there's no skip button, fast-forward all
+ *    audio/video elements to their end — this ends un-skippable audio ads.
+ *
+ * [callback] receives one of: "skipped-via-button", "fast-forwarded", "no-ad".
+ */
+internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
+    evaluateJavascript(
+        """
+        (function(){
+          var skipBtn = document.querySelector('[data-testid="skip-ad-button"]');
+          if (skipBtn) { skipBtn.click(); return 'skipped-via-button'; }
+          var adLabel = document.querySelector(
+            '[data-testid="ad-label"],[data-testid="advertisement"],[aria-label="Advertisement"]'
+          );
+          if (!adLabel) {
+            var nowPlaying = document.querySelector('[data-testid="context-item-info-subtitles"]');
+            if (!nowPlaying || nowPlaying.textContent.toLowerCase().indexOf('advertisement') < 0) {
+              return 'no-ad';
+            }
+          }
+          var skipped = false;
+          document.querySelectorAll('audio,video').forEach(function(m) {
+            if (m.duration && isFinite(m.duration) && !m.paused) {
+              try { m.currentTime = m.duration; skipped = true; } catch(_) {}
+            }
+          });
+          return skipped ? 'fast-forwarded' : 'no-ad';
+        })();
+        """.trimIndent(),
+    ) { result ->
+        Log.d(WEBVIEW_DEBUG_TAG, "ad-skip result=$result")
+        callback?.invoke(result?.trim('"') ?: "no-ad")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JavaScript bridge helpers — called from the native playback overlay
 // ---------------------------------------------------------------------------
 
