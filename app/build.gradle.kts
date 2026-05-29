@@ -52,6 +52,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.media:media:1.7.0")
     implementation("androidx.browser:browser:1.8.0")
+    implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

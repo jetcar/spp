@@ -16,6 +16,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.net.toUri
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
 private const val WEBVIEW_DEBUG_TAG = "SpotifyWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
@@ -48,6 +50,39 @@ internal fun WebView.configureSpotifyWebSettings() {
     isFocusableInTouchMode = true
     isVerticalScrollBarEnabled = true
     isHorizontalScrollBarEnabled = false
+
+    // Inject the ad-blocker script at document-start so our fetch/WebSocket
+    // hooks are in place before Spotify's own JavaScript runs.
+    // This mirrors what the "Blockify" Chrome extension does via chrome.scripting.
+    installAdBlockerAtDocumentStart()
+}
+
+/**
+ * Installs the ad-blocker JavaScript at document-start using
+ * [WebViewCompat.addDocumentStartJavaScript] (requires WebView 69+, API 24+).
+ * Scoped to open.spotify.com only so it has no effect on any other page.
+ * Falls back silently on older WebView versions.
+ */
+@SuppressLint("RequiresFeature") // guarded by isFeatureSupported check inside
+private fun WebView.installAdBlockerAtDocumentStart() {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        try {
+            val script = context.resources
+                .openRawResource(com.spp.spotify.R.raw.spotify_ad_blocker)
+                .bufferedReader()
+                .readText()
+            WebViewCompat.addDocumentStartJavaScript(
+                this,
+                script,
+                setOf("https://open.spotify.com"),
+            )
+            Log.i(WEBVIEW_DEBUG_TAG, "ad-blocker document-start script installed")
+        } catch (e: Exception) {
+            Log.e(WEBVIEW_DEBUG_TAG, "failed to install ad-blocker script: $e")
+        }
+    } else {
+        Log.w(WEBVIEW_DEBUG_TAG, "addDocumentStartJavaScript not supported on this WebView version")
+    }
 }
 
 internal fun createLoggingWebChromeClient(): WebChromeClient {
@@ -172,9 +207,12 @@ internal fun createLoggingWebViewClient(): WebViewClient {
             view: WebView?,
             request: WebResourceRequest?,
         ): WebResourceResponse? {
-            val url = request?.url?.toString().orEmpty()
-            if (url.isNotBlank()) {
-                Log.d(WEBVIEW_DEBUG_TAG, "request ${request?.method ?: "GET"} $url")
+            val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+            // Block known Spotify ad-audio and ad-tracking endpoints at network level.
+            // This is a second-layer defence; the primary layer is the JS state-machine hook.
+            if (isAdNetworkUrl(url)) {
+                Log.i(WEBVIEW_DEBUG_TAG, "ad-network request blocked: $url")
+                return emptyResponse()
             }
             return super.shouldInterceptRequest(view, request)
         }
@@ -249,42 +287,209 @@ internal fun WebView.pauseAllMedia() {
 // ---------------------------------------------------------------------------
 
 /**
- * Attempts to skip the current Spotify ad.
+ * Dumps the current now-playing bar's data-testid elements and the first
+ * audio element's state to Logcat under the [WEBVIEW_DEBUG_TAG] tag.
+ * Call this once when an ad is suspected to discover which selectors are live.
+ */
+internal fun WebView.dumpNowPlayingState() {
+    evaluateJavascript(
+        """
+        (function(){
+          var info = {};
+          // Collect every data-testid value visible in the now-playing bar
+          var bar = document.querySelector('[data-testid="now-playing-bar"]') ||
+                    document.querySelector('[data-testid="now-playing-widget"]') ||
+                    document.querySelector('footer') || document.body;
+          var testIds = Array.from(bar.querySelectorAll('[data-testid]'))
+            .map(function(el){ return el.dataset.testid + '=' + el.textContent.trim().substring(0,40); });
+          info.testIds = testIds.slice(0,30);
+          // All visible leaf text nodes in bar (to see "Advertisement" / "Spotify" labels)
+          info.barLeafTexts = Array.from(bar.querySelectorAll('a,span,div'))
+            .filter(function(el){ return el.children.length===0 && el.offsetParent!==null && el.textContent.trim().length>0; })
+            .map(function(el){ return el.textContent.trim().substring(0,50); })
+            .slice(0,20);
+          // All audio elements state
+          var audioEls = Array.from(document.querySelectorAll('audio'));
+          info.audioElements = audioEls.map(function(a){
+            return {
+              src: (a.currentSrc||a.src||'').substring(0,100),
+              paused: a.paused, duration: a.duration, currentTime: a.currentTime,
+              muted: a.muted, volume: a.volume, readyState: a.readyState,
+              networkState: a.networkState
+            };
+          });
+          return JSON.stringify(info);
+        })();
+        """.trimIndent(),
+    ) { result ->
+        Log.i(WEBVIEW_DEBUG_TAG, "now-playing-state: $result")
+    }
+}
+
+/**
+ * Attempts to skip the current Spotify ad using a layered strategy:
  *
- * Strategy (in order):
- * 1. Click `[data-testid="skip-ad-button"]` if it exists (skippable ad).
- * 2. If an ad label is detected but there's no skip button, fast-forward all
- *    audio/video elements to their end — this ends un-skippable audio ads.
+ * 1. Click a visible skip/close button (skippable video / display ads).
+ * 2. Detect an audio ad via title text, explicit ad-testid elements, or audio
+ *    source URL patterns, then fast-forward the playing audio element to its end.
+ * 3. If seeking is blocked (DRM), mute all audio elements as a fallback and
+ *    record the muted state in `window.__spotifyAdMuted`.
+ * 4. On subsequent calls with no ad detected, restore audio if it was muted.
  *
- * [callback] receives one of: "skipped-via-button", "fast-forwarded", "no-ad".
+ * [callback] receives a status string logged under tag `SpotifyWV`.
  */
 internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
     evaluateJavascript(
         """
         (function(){
-          var skipBtn = document.querySelector('[data-testid="skip-ad-button"]');
-          if (skipBtn) { skipBtn.click(); return 'skipped-via-button'; }
-          var adLabel = document.querySelector(
-            '[data-testid="ad-label"],[data-testid="advertisement"],[aria-label="Advertisement"]'
+          // ── 1. Skip/close button (testid + aria-label + text-content scan) ─
+          var skipBtn = document.querySelector(
+            '[data-testid="skip-ad-button"],' +
+            '[data-testid="ad-skip-button"],' +
+            '[data-testid="skip-button"],' +
+            '[class*="skip-ad"],' +
+            '[aria-label*="skip" i]'
           );
-          if (!adLabel) {
-            var nowPlaying = document.querySelector('[data-testid="context-item-info-subtitles"]');
-            if (!nowPlaying || nowPlaying.textContent.toLowerCase().indexOf('advertisement') < 0) {
-              return 'no-ad';
+          // Broaden: scan visible buttons/spans for "Skip" text
+          if (!skipBtn || skipBtn.offsetParent === null) {
+            var allBtns = document.querySelectorAll('button,span[role="button"]');
+            for (var b = 0; b < allBtns.length; b++) {
+              var bt = allBtns[b];
+              if (bt.offsetParent !== null &&
+                  /^skip/i.test((bt.textContent || '').trim())) {
+                skipBtn = bt; break;
+              }
             }
           }
-          var skipped = false;
+          if (skipBtn && skipBtn.offsetParent !== null) {
+            skipBtn.click();
+            window.__spotifyAdMuted = false;
+            window.__spotifyAdCount = 0;
+            return 'skipped-via-button';
+          }
+
+          // ── 2. Ad detection via multiple DOM signals ──────────────────────
+          var detected = null;
+
+          // 2a. Explicit ad-related testid elements
+          var explicitAd = document.querySelector(
+            '[data-testid="ad-label"],' +
+            '[data-testid="advertisement"],' +
+            '[data-testid="ad-indicator"],' +
+            '[data-testid="ads-label"],' +
+            '[data-testid="ad-countdown"],' +
+            '[data-testid="advertisement-banner"]'
+          );
+          if (explicitAd) detected = 'testid:' + (explicitAd.dataset.testid || 'found');
+
+          // 2b. Now-playing bar shows "Advertisement" as track name and "Spotify" as artist.
+          // Scan ALL anchor/span elements inside the now-playing footer for those strings.
+          if (!detected) {
+            var bar = document.querySelector('[data-testid="now-playing-bar"]') ||
+                      document.querySelector('[data-testid="now-playing-widget"]') ||
+                      document.querySelector('footer') || document.body;
+            var barTexts = Array.from(bar.querySelectorAll('a,span,div'))
+              .filter(function(el){ return el.children.length === 0 && el.offsetParent !== null; })
+              .map(function(el){ return el.textContent.trim().toLowerCase(); });
+            var hasAdvert = barTexts.some(function(t){ return t === 'advertisement'; });
+            var hasSpotify = barTexts.some(function(t){ return t === 'spotify'; });
+            if (hasAdvert) detected = 'bar-text:advertisement' + (hasSpotify ? '+spotify' : '');
+          }
+
+          // 2c. Any visible testid title element with ad text
+          if (!detected) {
+            var titleEl = document.querySelector(
+              '[data-testid="context-item-info-title"] a,' +
+              '[data-testid="context-item-info-title"],' +
+              '[data-testid="now-playing-bar-title"],' +
+              '[data-testid="track-info-name"]'
+            );
+            if (titleEl) {
+              var t = titleEl.textContent.trim().toLowerCase();
+              if (t === 'advertisement' || t === 'ad') detected = 'title:' + t;
+            }
+          }
+
+          // 2d. Any visible leaf element whose text is literally "Advertisement"
+          if (!detected) {
+            var all = document.querySelectorAll('span,div,p');
+            for (var i = 0; i < all.length; i++) {
+              var el = all[i];
+              if (el.children.length === 0 &&
+                  el.textContent.trim().toLowerCase() === 'advertisement' &&
+                  el.offsetParent !== null) {
+                detected = 'text-node:advertisement';
+                break;
+              }
+            }
+          }
+
+          // 2e. Audio source URL contains known ad-network patterns
+          if (!detected) {
+            var audios = document.querySelectorAll('audio');
+            for (var j = 0; j < audios.length; j++) {
+              var src = audios[j].currentSrc || audios[j].src || '';
+              if (src && (/adswizz|audio-ads|ad-audio|adeventtracker|tritondigital/.test(src))) {
+                detected = 'audio-src';
+                break;
+              }
+            }
+          }
+
+          // ── No ad signal — restore mute if needed and exit ────────────────
+          if (!detected) {
+            window.__spotifyAdCount = 0;
+            if (window.__spotifyAdMuted) {
+              document.querySelectorAll('audio,video').forEach(function(m) {
+                try { m.muted = false; if (m.volume < 0.05) m.volume = 1; } catch(_) {}
+              });
+              window.__spotifyAdMuted = false;
+              return 'unmuted-after-ad';
+            }
+            return 'no-ad';
+          }
+
+          // Increment consecutive-detection counter
+          window.__spotifyAdCount = (window.__spotifyAdCount || 0) + 1;
+
+          // ── 3. Fast-forward ALL media (paused or not) ─────────────────────
+          var seeked = false;
           document.querySelectorAll('audio,video').forEach(function(m) {
-            if (m.duration && isFinite(m.duration) && !m.paused) {
-              try { m.currentTime = m.duration; skipped = true; } catch(_) {}
+            if (m.duration && isFinite(m.duration) && m.duration > 0) {
+              try {
+                m.currentTime = Math.max(0, m.duration - 0.1);
+                // Resume if it was paused so the player advances to next track
+                if (m.paused) { try { m.play(); } catch(_) {} }
+                seeked = true;
+              } catch (_) {}
             }
           });
-          return skipped ? 'fast-forwarded' : 'no-ad';
+          if (seeked) {
+            window.__spotifyAdMuted = false;
+            window.__spotifyAdCount = 0;
+            return 'fast-forwarded:' + detected;
+          }
+
+          // ── 4. Mute fallback — mute ALL media (paused or playing) ─────────
+          // Previous version only muted !paused elements; ads are often paused
+          // momentarily while buffering, causing the "detected-no-action" loop.
+          var mutedCount = 0;
+          document.querySelectorAll('audio,video').forEach(function(m) {
+            try { m.muted = true; m.volume = 0; mutedCount++; } catch(_) {}
+          });
+          var didMute = mutedCount > 0;
+          window.__spotifyAdMuted = didMute;
+          return didMute
+            ? ('muted:' + detected + ':count=' + window.__spotifyAdCount)
+            : ('detected-no-media:' + detected + ':count=' + window.__spotifyAdCount);
         })();
         """.trimIndent(),
     ) { result ->
-        Log.d(WEBVIEW_DEBUG_TAG, "ad-skip result=$result")
-        callback?.invoke(result?.trim('"') ?: "no-ad")
+        val status = result?.trim('"') ?: "no-ad"
+        if (status != "no-ad") {
+            Log.i(WEBVIEW_DEBUG_TAG, "ad-skip: $status")
+        }
+        callback?.invoke(status)
     }
 }
 
@@ -319,6 +524,45 @@ internal fun WebView.queryIsPlaying(callback: (Boolean) -> Unit) {
 }
 
 /**
+ * Queries whether the currently playing track is saved to the user's
+ * Liked Songs by inspecting the add-button's aria state.
+ *
+ * Spotify's add-button uses:
+ *   - `aria-checked="true"`  when the track is already liked
+ *   - `aria-label` containing "Remove" when liked, "Save" when not
+ *
+ * [callback] is called with `true` if liked, `false` if not liked,
+ * `null` if the button is not present (no track playing yet).
+ */
+internal fun WebView.queryIsLiked(callback: (Boolean?) -> Unit) {
+    evaluateJavascript(
+        """
+        (function(){
+          var btn = document.querySelector('[data-testid="add-button"]');
+          if (!btn) return 'absent';
+          var checked = btn.getAttribute('aria-checked');
+          if (checked === 'true')  return 'liked';
+          if (checked === 'false') return 'not-liked';
+          // Fall back to aria-label text
+          var label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          if (label.indexOf('remove') >= 0) return 'liked';
+          if (label.indexOf('save')   >= 0) return 'not-liked';
+          return 'unknown';
+        })();
+        """.trimIndent(),
+    ) { result ->
+        val r = result?.trim('"') ?: "absent"
+        callback(
+            when (r) {
+                "liked"     -> true
+                "not-liked" -> false
+                else        -> null   // absent or unknown — don't change current state
+            }
+        )
+    }
+}
+
+/**
  * Queries the title and artist of the currently playing track from the
  * Spotify web player's now-playing bar, then invokes [callback] with both values.
  * Either value may be an empty string if the DOM element is not present.
@@ -343,6 +587,26 @@ internal fun WebView.queryTrackInfo(callback: (title: String, artist: String) ->
         }
     }
 }
+
+// Known Spotify / ad-network URL patterns to block at the network layer.
+// These URLs are only ever used to serve ad audio or ad tracking pixels.
+private val AD_NETWORK_URL_PATTERNS = listOf(
+    "audio-ads.spotify.com",
+    "adswizz.com",
+    "adeventtracker.spotify.com",
+    "tritondigital.com",
+    "audio-fa.scdn.co/ads/",          // Spotify ad audio CDN path
+    "pagead2.googlesyndication.com",
+    "doubleclick.net",
+    "omnivore.spotify.com/1/e/",       // Spotify ad impression tracking
+)
+
+private fun isAdNetworkUrl(url: String): Boolean =
+    AD_NETWORK_URL_PATTERNS.any { url.contains(it, ignoreCase = true) }
+
+/** Returns a 200 OK response with an empty body — used to silently block requests. */
+private fun emptyResponse(): WebResourceResponse =
+    WebResourceResponse("text/plain", "utf-8", 200, "OK", emptyMap(), "".byteInputStream())
 
 private fun buildSpotifyDesktopUserAgent(defaultUserAgent: String): String {
     val chromeVersion =
