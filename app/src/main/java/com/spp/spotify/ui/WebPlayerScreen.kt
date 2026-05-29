@@ -3,6 +3,11 @@ package com.spp.spotify.ui
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -47,6 +52,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import com.spp.spotify.media.MediaPlaybackService
 
 private const val SPOTIFY_WEB_PLAYER_URL = "https://open.spotify.com/"
 
@@ -60,6 +66,7 @@ private const val SEL_SKIP_FORWARD = "[data-testid=control-button-skip-forward]"
 fun WebPlayerScreen() {
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     val isPlaying  = remember { mutableStateOf(false) }
+    val serviceRef = remember { mutableStateOf<MediaPlaybackService?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
@@ -122,11 +129,50 @@ fun WebPlayerScreen() {
         }
     }
 
-    // Keep the play/pause icon in sync with the actual player state
+    // Keep the play/pause icon in sync with the actual player state; also
+    // push current track metadata to the media notification.
     LaunchedEffect(Unit) {
         while (isActive) {
             delay(2_000)
-            webViewRef.value?.queryIsPlaying { playing -> isPlaying.value = playing }
+            val wv = webViewRef.value ?: continue
+            wv.queryIsPlaying { playing ->
+                isPlaying.value = playing
+                wv.queryTrackInfo { title, artist ->
+                    serviceRef.value?.update(playing, title, artist)
+                }
+            }
+        }
+    }
+
+    // ── MediaPlaybackService binding ─────────────────────────────────────────
+    // Starts the foreground service and wires media-button callbacks so that
+    // lock-screen controls, Bluetooth buttons, and the notification actions
+    // all drive the WebView JS bridge.
+    DisposableEffect(context) {
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                (binder as? MediaPlaybackService.LocalBinder)?.service?.also { svc ->
+                    serviceRef.value = svc
+                    svc.onPlayPause    = { webViewRef.value?.clickSpotifyButton(SEL_PLAY_PAUSE) }
+                    svc.onSkipNext     = { webViewRef.value?.clickSpotifyButton(SEL_SKIP_FORWARD) }
+                    svc.onSkipPrevious = { webViewRef.value?.clickSpotifyButton(SEL_SKIP_BACK) }
+                }
+            }
+            override fun onServiceDisconnected(name: ComponentName?) {
+                serviceRef.value = null
+            }
+        }
+        val intent = Intent(context, MediaPlaybackService::class.java)
+        context.startForegroundService(intent)
+        context.bindService(intent, conn, Context.BIND_AUTO_CREATE)
+
+        onDispose {
+            serviceRef.value?.apply {
+                onPlayPause    = null
+                onSkipNext     = null
+                onSkipPrevious = null
+            }
+            context.unbindService(conn)
         }
     }
 

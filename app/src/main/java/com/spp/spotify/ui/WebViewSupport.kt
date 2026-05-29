@@ -318,6 +318,32 @@ internal fun WebView.queryIsPlaying(callback: (Boolean) -> Unit) {
     ) { result -> callback(result?.contains("playing") == true) }
 }
 
+/**
+ * Queries the title and artist of the currently playing track from the
+ * Spotify web player's now-playing bar, then invokes [callback] with both values.
+ * Either value may be an empty string if the DOM element is not present.
+ */
+internal fun WebView.queryTrackInfo(callback: (title: String, artist: String) -> Unit) {
+    evaluateJavascript(
+        """
+        (function(){
+          try {
+            var t = document.querySelector('[data-testid="context-item-info-title"]');
+            var a = document.querySelector('[data-testid="context-item-info-subtitles"]');
+            return [(t ? t.textContent.trim() : ''), (a ? a.textContent.trim() : '')];
+          } catch(_) { return ['', '']; }
+        })();
+        """.trimIndent(),
+    ) { result ->
+        try {
+            val arr = org.json.JSONArray(result ?: "[]")
+            callback(arr.optString(0), arr.optString(1))
+        } catch (_: Exception) {
+            callback("", "")
+        }
+    }
+}
+
 private fun buildSpotifyDesktopUserAgent(defaultUserAgent: String): String {
     val chromeVersion =
         Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"

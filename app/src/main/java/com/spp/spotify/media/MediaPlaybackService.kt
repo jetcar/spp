@@ -1,17 +1,20 @@
 package com.spp.spotify.media
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
@@ -49,6 +52,12 @@ class MediaPlaybackService : Service() {
 
     private lateinit var mediaSession: MediaSessionCompat
 
+    // ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK was added in API 29.
+    // ServiceCompat.startForeground() guards the call internally for older devices,
+    // so inlining the constant here is safe.
+    @SuppressLint("InlinedApi")
+    private val foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -70,7 +79,10 @@ class MediaPlaybackService : Service() {
             isActive = true
         }
 
-        startForeground(NOTIF_ID, buildNotification(false, "Spotify", ""))
+        ServiceCompat.startForeground(
+            this, NOTIF_ID, buildNotification(false, "Spotify", ""),
+            foregroundServiceType,
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -105,9 +117,12 @@ class MediaPlaybackService : Service() {
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
                 .build(),
         )
-        // Update via startForeground so the notification is treated as a
-        // foreground-service notification — exempt from POST_NOTIFICATIONS check.
-        startForeground(NOTIF_ID, buildNotification(isPlaying, title, artist))
+        // Update via ServiceCompat.startForeground with explicit type — required
+        // on Android 14+ and exempt from POST_NOTIFICATIONS runtime permission.
+        ServiceCompat.startForeground(
+            this, NOTIF_ID, buildNotification(isPlaying, title, artist),
+            foregroundServiceType,
+        )
     }
 
     // ------------------------------------------------------------------
@@ -207,4 +222,3 @@ class MediaPlaybackService : Service() {
         const val NOTIF_ID = 1001
     }
 }
-
