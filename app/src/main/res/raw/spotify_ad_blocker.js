@@ -2,11 +2,16 @@
 // Spotify Ad Blocker – injected at document-start before Spotify's own scripts.
 //
 // Strategy (same as the "Blockify" Chrome extension):
-//   1. Replace window.WebSocket so we can intercept every WS message.
-//   2. Replace window.fetch so we can intercept the state-machine REST calls.
-//   3. When Spotify's player receives a state machine (via fetch /state or via
-//      WS replace_state), walk every state and replace ad states with the next
-//      non-ad state, so ads are removed from the queue before playback starts.
+//   1. Replace window.fetch to intercept state-machine REST calls.
+//   2. When Spotify's player fetches a state machine, walk every state and
+//      replace ad states with the next non-ad state before playback starts.
+//
+// NOTE: WebSocket interception has been intentionally removed.
+//   Replacing the native WebSocket constructor or patching ws.onmessage via
+//   Object.defineProperty overrides a V8-backed native accessor which causes a
+//   reproducible CHECK() assertion failure on Chrome_IOThread after ~30 minutes
+//   (signal 5 SIGTRAP in libwebviewchromium.so). The fetch hook alone handles
+//   the initial state fetch which covers the vast majority of ads.
 //
 // Rate-limiting / 429 protection:
 //   - _manipulate() is guarded by a mutex – only one concurrent execution.
@@ -19,81 +24,7 @@
 (function () {
   'use strict';
 
-  // ── 1. wsHook – WebSocket message interceptor ─────────────────────────────
-  var wsHook = {};
-
-  (function () {
-    var _defaultBefore = function (data) {
-      return new Promise(function (resolve) { resolve(data); });
-    };
-    var _defaultAfter = function (e) { return Promise.resolve(e); };
-
-    wsHook.before = _defaultBefore;
-    wsHook.after  = _defaultAfter;
-    wsHook.resetHooks = function () {
-      wsHook.before = _defaultBefore;
-      wsHook.after  = _defaultAfter;
-    };
-
-    var _NativeWS = WebSocket;
-
-    WebSocket = function (url, protocols) {
-      var ws = protocols ? new _NativeWS(url, protocols) : new _NativeWS(url);
-
-      // Intercept send
-      var _send = ws.send.bind(ws);
-      ws.send = function (data) {
-        wsHook.before(data, url).then(function (d) {
-          if (d != null) _send(d);
-        }).catch(function () { _send(data); });
-      };
-
-      // Intercept onmessage
-      var _onmsg = null;
-      Object.defineProperty(ws, 'onmessage', {
-        get: function () { return _onmsg; },
-        set: function (fn) {
-          _onmsg = fn;
-          wsHook.onMessage = fn;
-        }
-      });
-
-      ws.addEventListener('message', function (evt) {
-        if (!_onmsg) return;
-        wsHook.after(new MutableMessageEvent(evt), url)
-          .then(function (modEvt) { if (modEvt) _onmsg.call(ws, modEvt); })
-          .catch(function ()      { _onmsg.call(ws, evt); });
-      });
-
-      return ws;
-    };
-
-    Object.keys(_NativeWS).forEach(function (k) { WebSocket[k] = _NativeWS[k]; });
-    WebSocket.prototype = _NativeWS.prototype;
-  })();
-
-  function MutableMessageEvent(o) {
-    this.bubbles       = o.bubbles       || false;
-    this.cancelBubble  = o.cancelBubble  || false;
-    this.cancelable    = o.cancelable    || false;
-    this.currentTarget = o.currentTarget || null;
-    this.data          = o.data          || null;
-    this.defaultPrevented = o.defaultPrevented || false;
-    this.eventPhase    = o.eventPhase    || 0;
-    this.lastEventId   = o.lastEventId   || '';
-    this.origin        = o.origin        || '';
-    this.path          = o.path          || [];
-    this.ports         = o.ports         || [];
-    this.returnValue   = o.returnValue   || true;
-    this.source        = o.source        || null;
-    this.srcElement    = o.srcElement    || null;
-    this.target        = o.target        || null;
-    this.timeStamp     = o.timeStamp     || null;
-    this.type          = o.type          || 'message';
-    this.__proto__     = o.__proto__     || MessageEvent.prototype;
-  }
-
-  // ── 2. State-machine ad removal ───────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────
   var _originalFetch   = window.fetch;
   var _accessToken     = '';
   var _deviceId        = '';
@@ -126,7 +57,7 @@
     } catch (_) {}
   }
 
-  // ── 2a. Hook fetch ────────────────────────────────────────────────────────
+  // ── Hook fetch ───────────────────────────────────────────────────────────
   window.fetch = function (url, init) {
     var urlStr = _urlStr(url);
 
@@ -184,32 +115,7 @@
     return resp;
   }
 
-  // ── 2b. Hook WebSocket ────────────────────────────────────────────────────
-  wsHook.after = function (evt, url) {
-    return new Promise(async function (resolve) {
-      try {
-        var data = JSON.parse(evt.data);
-        if (!data.payloads) { resolve(evt); return; }
-
-        for (var i = 0; i < data.payloads.length; i++) {
-          var pl = data.payloads[i];
-          if (pl.type === 'replace_state' && pl['state_ref']) {
-            var idx = pl['state_ref']['state_index'];
-            pl['state_machine'] = await _manipulateSafe(pl['state_machine'], idx, true);
-            data.payloads[i] = pl;
-          }
-        }
-        evt.data = JSON.stringify(data);
-        resolve(evt);
-      } catch (e) {
-        console.error('[SpotifyAdBlock] WS hook error: ' + e);
-        resolve(evt);
-      }
-    });
-  };
-
-  // ── 2c. Mutex wrapper for _manipulate ─────────────────────────────────────
-  // Prevents simultaneous fetch + WS manipulations from both calling _getStates.
+  // ── Mutex wrapper for _manipulate ────────────────────────────────────────
   function _manipulateSafe(sm, startIdx, isWS) {
     return new Promise(function (resolve) {
       _manipulateQueue.push({ sm: sm, startIdx: startIdx, isWS: isWS, resolve: resolve });
@@ -232,7 +138,7 @@
     });
   }
 
-  // ── 2d. Core: manipulate the state machine ────────────────────────────────
+  // ── Core: manipulate the state machine ───────────────────────────────────
   async function _manipulate(sm, startIdx, isWS) {
     var states = sm['states'];
     var tracks = sm['tracks'];
@@ -407,7 +313,7 @@
     return sm || null;
   }
 
-  console.log('[SpotifyAdBlock] fetch + WebSocket hooks installed');
+  console.log('[SpotifyAdBlock] fetch hook installed (WebSocket hook disabled – crash prevention)');
 
 })();
 
