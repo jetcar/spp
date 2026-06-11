@@ -227,7 +227,7 @@
   }
 
   function _getNextNonAd(sm, sourceTrack, startIdx) {
-    startIdx = startIdx || 2;
+    startIdx = (startIdx != null) ? startIdx : 0;
     var states = sm['states'];
     var tracks = sm['tracks'];
     var foundSource = false;
@@ -388,7 +388,7 @@
           } catch(e) {}
         }
       }
-      if (!seeked && retries < 5) {
+      if (!seeked && retries < 10) {
         // Duration not yet known (ad still buffering) – retry
         _wsFastForwardAd(retries + 1);
       }
