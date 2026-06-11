@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
@@ -48,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import android.view.WindowManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -59,6 +62,7 @@ import kotlinx.coroutines.isActive
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import com.spp.spotify.media.MediaPlaybackService
+import com.spp.spotify.CrashRecoveryHandler
 
 private const val SPOTIFY_WEB_PLAYER_URL = "https://open.spotify.com/"
 
@@ -77,6 +81,20 @@ fun WebPlayerScreen() {
     val serviceRef = remember { mutableStateOf<MediaPlaybackService?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
+    val view = LocalView.current
+
+    // Keep the screen on while this screen is shown
+    DisposableEffect(view) {
+        val window = (view.context as? android.app.Activity)?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // Crash-recovery: detect if we're restarting after a crash and whether playback was active.
+    val isCrashRecovery   = remember { CrashRecoveryHandler.isCrashRecovery(context) }
+    val wasPlayingOnCrash = remember { CrashRecoveryHandler.wasPlayingBeforeCrash(context) }
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     val maxMusicVolume = remember(audioManager) {
         audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
@@ -90,6 +108,22 @@ fun WebPlayerScreen() {
             delay(1_000)
             uptimeSeconds.value++
         }
+    }
+
+    // Crash-recovery auto-play: if the app crashed while playing, resume after Spotify loads.
+    LaunchedEffect(isCrashRecovery) {
+        if (isCrashRecovery) {
+            // Wait for WebView to be created
+            while (webViewRef.value == null) delay(300)
+            // Give Spotify ~5 s to fully load and be interactive
+            delay(5_000)
+            if (wasPlayingOnCrash) {
+                webViewRef.value?.clickSpotifyButton(SEL_PLAY_PAUSE)
+                android.util.Log.i("CrashRecovery", "Auto-play triggered after crash restart")
+            }
+        }
+        // Always clear the flag so the next normal launch is unaffected.
+        CrashRecoveryHandler.clearRecoveryFlag(context)
     }
 
     fun formatUptime(seconds: Long): String {
@@ -162,8 +196,10 @@ fun WebPlayerScreen() {
             val wv = webViewRef.value ?: continue
             wv.queryIsPlaying { playing ->
                 isPlaying.value = playing
-                wv.queryTrackInfo { title, artist ->
-                    serviceRef.value?.update(playing, title, artist)
+                // Persist playing state so crash handler can auto-resume on restart.
+                CrashRecoveryHandler.savePlaybackState(context, playing)
+                wv.queryTrackInfo { title, artist, positionMs, durationMs ->
+                    serviceRef.value?.update(playing, title, artist, positionMs, durationMs)
                 }
             }
             wv.queryIsLiked { liked ->
@@ -227,9 +263,12 @@ fun WebPlayerScreen() {
             delay(1_500)
             webViewRef.value?.skipAdIfPresent { status ->
                 val isAdEvent = status != "no-ad" && status != "unmuted-after-ad"
-                if (isAdEvent && !dumped) {
-                    dumped = true
-                    webViewRef.value?.dumpNowPlayingState()
+                if (isAdEvent) {
+                    android.util.Log.i("SpotifyWV", "ad-skip-poll: $status")
+                    if (!dumped) {
+                        dumped = true
+                        webViewRef.value?.dumpNowPlayingState()
+                    }
                 }
                 // Re-dump on first no-media case so we can see the DOM when audio is absent
                 if (status.startsWith("detected-no-media") && dumped) {
@@ -259,18 +298,37 @@ fun WebPlayerScreen() {
             update = { webView -> webViewRef.value = webView },
         )
 
-        // Uptime timer badge – top-right corner
-        Text(
-            text = formatUptime(uptimeSeconds.value),
-            color = Color.White,
-            fontSize = 12.sp,
+        // Top-right corner: refresh button + uptime badge
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(end = 12.dp, top = 6.dp)
-                .background(Color(0x66000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-        )
+                .padding(end = 12.dp, top = 2.dp),
+        ) {
+            IconButton(
+                onClick = { webViewRef.value?.loadUrl(SPOTIFY_WEB_PLAYER_URL) },
+                modifier = Modifier
+                    .background(Color(0x66000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Refresh,
+                    contentDescription = "Reload Spotify",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Text(
+                text = formatUptime(uptimeSeconds.value),
+                color = Color.White,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .background(Color(0x66000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
 
         // Transparent playback controls pinned to the bottom
         PlaybackOverlay(
@@ -329,8 +387,15 @@ fun WebPlayerScreen() {
                     webViewRef.value?.resumeTimers()
                 }
                 Lifecycle.Event.ON_PAUSE -> {
-                    webViewRef.value?.onPause()
-                    webViewRef.value?.pauseTimers()
+                    // Do NOT call pauseTimers() — it is a global call that stops ALL
+                    // JavaScript timers in every WebView, including Spotify's keep-alive
+                    // and state-machine heartbeats, causing audio to stop within seconds.
+                    //
+                    // Only call onPause() when music is not playing so Chromium can
+                    // throttle rendering/GPU without touching the JS audio pipeline.
+                    if (!isPlaying.value) {
+                        webViewRef.value?.onPause()
+                    }
                 }
                 else -> Unit
             }
@@ -342,7 +407,7 @@ fun WebPlayerScreen() {
             lifecycleOwner.lifecycle.removeObserver(observer)
             webViewRef.value?.apply {
                 onPause()
-                pauseTimers()
+                pauseTimers()   // safe here — WebView is about to be destroyed
                 stopLoading()
                 loadUrl("about:blank")
                 destroy()

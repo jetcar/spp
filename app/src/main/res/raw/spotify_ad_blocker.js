@@ -143,12 +143,17 @@
     var states = sm['states'];
     var tracks = sm['tracks'];
     var changed = false;
+    // Track indices that were already shortened so we never re-process them.
+    // _shortenAd only changes playback position, NOT the URI, so _isAd() would
+    // still return true and the do-while loop would spin forever without this guard.
+    var shortenedIdx = {};
 
     do {
       changed = false;
       for (var i = 0; i < states.length; i++) {
         var state = states[i];
         if (!_isAd(state, sm)) continue;
+        if (shortenedIdx[i]) continue; // already shortened in a previous pass – skip
 
         var adTrack = tracks[state['track']];
         console.log('[SpotifyAdBlock] ad detected: ' + adTrack['metadata']['uri']);
@@ -183,11 +188,12 @@
               console.warn('[SpotifyAdBlock] _getStates failed: ' + e);
             }
           }
-          // If still an ad after fetch attempt (or rate-limited), shorten it
+          // If still an ad after fetch attempt (or rate-limited), shorten it.
+          // Do NOT set changed=true – that would re-trigger the loop for a state
+          // whose URI still satisfies _isAd(), causing an infinite detect→shorten cycle.
           if (_isAd(next, sm)) {
-            state = _shortenAd(state, adTrack);
-            states[i] = state;
-            changed = true;
+            states[i] = _shortenAd(state, adTrack);
+            shortenedIdx[i] = true;
             continue;
           }
           changed = true;
@@ -313,7 +319,83 @@
     return sm || null;
   }
 
-  console.log('[SpotifyAdBlock] fetch hook installed (WebSocket hook disabled – crash prevention)');
+  // ── Safe WebSocket ad observer ──────────────────────────────────────────
+  // We replace the WebSocket constructor so we can add ONE passive listener to
+  // every WS connection.  When Spotify pushes a replace_state payload that
+  // contains an ad state we immediately fast-forward the audio element.
+  //
+  // Safety rules (prevents the Chrome_IOThread SIGTRAP crash from the old hook):
+  //   ✓  We do NOT use Object.defineProperty on any WebSocket instance.
+  //   ✓  We do NOT touch ws.onmessage at all.
+  //   ✓  We do NOT modify Spotify's messages before it sees them.
+  //   ✓  Our listener only reads; Spotify's own listeners receive the original event.
+  (function() {
+    var _NativeWS = window.WebSocket;
+
+    function SpotifyWSWrapper(url, protocols) {
+      var ws = protocols ? new _NativeWS(url, protocols) : new _NativeWS(url);
+
+      ws.addEventListener('message', function(evt) {
+        try {
+          if (typeof evt.data !== 'string') return;
+          var msg = JSON.parse(evt.data);
+          if (!msg || !Array.isArray(msg.payloads)) return;
+          for (var i = 0; i < msg.payloads.length; i++) {
+            var pl = msg.payloads[i];
+            if (pl && pl.type === 'replace_state' && pl.state_machine) {
+              if (_wsHasAdState(pl.state_machine)) {
+                console.log('[SpotifyAdBlock] WS replace_state contains ad – fast-forwarding');
+                _wsFastForwardAd(0);
+              }
+            }
+          }
+        } catch(e) {}
+      });
+
+      return ws; // returning ws (not this) makes "new SpotifyWSWrapper()" yield the native instance
+    }
+
+    // Copy static constants (CONNECTING=0, OPEN=1, …)
+    try {
+      Object.keys(_NativeWS).forEach(function(k) { SpotifyWSWrapper[k] = _NativeWS[k]; });
+    } catch(e) {}
+    SpotifyWSWrapper.prototype = _NativeWS.prototype;
+    window.WebSocket = SpotifyWSWrapper;
+  })();
+
+  function _wsHasAdState(sm) {
+    if (!sm || !sm.states || !sm.tracks) return false;
+    for (var i = 0; i < sm.states.length; i++) {
+      if (_isAd(sm.states[i], sm)) return true;
+    }
+    return false;
+  }
+
+  // Attempt to fast-forward all audio elements to their end so Spotify's player
+  // fires the 'ended' event and advances to the next (non-ad) state.
+  // retries: how many times we've already retried waiting for duration.
+  function _wsFastForwardAd(retries) {
+    setTimeout(function() {
+      var audios = document.querySelectorAll('audio');
+      var seeked = false;
+      for (var i = 0; i < audios.length; i++) {
+        var a = audios[i];
+        if (a.duration && isFinite(a.duration) && a.duration > 0) {
+          try {
+            a.currentTime = a.duration - 0.1;
+            if (a.paused) { try { a.play(); } catch(e2) {} }
+            seeked = true;
+          } catch(e) {}
+        }
+      }
+      if (!seeked && retries < 5) {
+        // Duration not yet known (ad still buffering) – retry
+        _wsFastForwardAd(retries + 1);
+      }
+    }, retries === 0 ? 150 : 500);
+  }
+
+  console.log('[SpotifyAdBlock] fetch + safe-WS hooks installed');
 
 })();
 

@@ -109,12 +109,15 @@ class MediaPlaybackService : Service() {
     // Public API called from WebPlayerScreen
     // ------------------------------------------------------------------
 
-    fun update(isPlaying: Boolean, title: String, artist: String) {
-        mediaSession.setPlaybackState(buildState(isPlaying))
+    fun update(isPlaying: Boolean, title: String, artist: String,
+               positionMs: Long = PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN,
+               durationMs: Long = -1L) {
+        mediaSession.setPlaybackState(buildState(isPlaying, positionMs))
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE,  title.ifBlank  { "Spotify" })
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+                .apply { if (durationMs > 0) putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs) }
                 .build(),
         )
         // Update via ServiceCompat.startForeground with explicit type — required
@@ -129,7 +132,10 @@ class MediaPlaybackService : Service() {
     // Internal helpers
     // ------------------------------------------------------------------
 
-    private fun buildState(isPlaying: Boolean): PlaybackStateCompat =
+    private fun buildState(
+        isPlaying: Boolean,
+        positionMs: Long = PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN,
+    ): PlaybackStateCompat =
         PlaybackStateCompat.Builder()
             .setActions(
                 PlaybackStateCompat.ACTION_PLAY_PAUSE or
@@ -141,7 +147,7 @@ class MediaPlaybackService : Service() {
             )
             .setState(
                 if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN,
+                positionMs,
                 if (isPlaying) 1f else 0f,
             )
             .build()

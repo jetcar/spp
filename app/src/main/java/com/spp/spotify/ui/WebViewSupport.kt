@@ -563,27 +563,34 @@ internal fun WebView.queryIsLiked(callback: (Boolean?) -> Unit) {
 }
 
 /**
- * Queries the title and artist of the currently playing track from the
- * Spotify web player's now-playing bar, then invokes [callback] with both values.
- * Either value may be an empty string if the DOM element is not present.
+ * Queries title, artist, current playback position (ms) and track duration (ms)
+ * from the Spotify web player's now-playing bar and the page's <audio> element.
+ * Position and duration are -1 when unavailable.
  */
-internal fun WebView.queryTrackInfo(callback: (title: String, artist: String) -> Unit) {
+internal fun WebView.queryTrackInfo(
+    callback: (title: String, artist: String, positionMs: Long, durationMs: Long) -> Unit,
+) {
     evaluateJavascript(
         """
         (function(){
           try {
             var t = document.querySelector('[data-testid="context-item-info-title"]');
             var a = document.querySelector('[data-testid="context-item-info-subtitles"]');
-            return [(t ? t.textContent.trim() : ''), (a ? a.textContent.trim() : '')];
-          } catch(_) { return ['', '']; }
+            var audio = document.querySelector('audio');
+            var pos = (audio && isFinite(audio.currentTime) && audio.currentTime >= 0)
+                      ? Math.round(audio.currentTime * 1000) : -1;
+            var dur = (audio && isFinite(audio.duration) && audio.duration > 0)
+                      ? Math.round(audio.duration * 1000) : -1;
+            return [(t ? t.textContent.trim() : ''), (a ? a.textContent.trim() : ''), pos, dur];
+          } catch(_) { return ['', '', -1, -1]; }
         })();
         """.trimIndent(),
     ) { result ->
         try {
             val arr = org.json.JSONArray(result ?: "[]")
-            callback(arr.optString(0), arr.optString(1))
+            callback(arr.optString(0), arr.optString(1), arr.optLong(2, -1L), arr.optLong(3, -1L))
         } catch (_: Exception) {
-            callback("", "")
+            callback("", "", -1L, -1L)
         }
     }
 }
