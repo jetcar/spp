@@ -19,6 +19,7 @@ import androidx.core.net.toUri
 
 private const val WEBVIEW_DEBUG_TAG = "TuneveilWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
+private val AUTH_HOSTS = setOf("accounts.spotify.com")
 
 @SuppressLint("SetJavaScriptEnabled")
 internal fun WebView.configureTuneveilWebSettings() {
@@ -634,6 +635,13 @@ private fun shouldOpenExternally(uri: Uri?): Boolean {
     val host = uri?.host?.lowercase().orEmpty()
     if (host.isBlank()) {
         return false
+    }
+
+    // The authentication UI is rendered by Chrome's Custom Tab.  Xiaomi's
+    // System WebView can complete accounts.spotify.com navigation but leave
+    // that page unpainted, producing the black login screen.
+    if (AUTH_HOSTS.any { host == it || host.endsWith(".$it") }) {
+        return true
     }
 
     return INTERNAL_WEBVIEW_HOSTS.none { host == it || host.endsWith(".$it") }
