@@ -19,7 +19,6 @@ import androidx.core.net.toUri
 
 private const val WEBVIEW_DEBUG_TAG = "TuneveilWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
-private val AUTH_HOSTS = setOf("accounts.spotify.com")
 
 @SuppressLint("SetJavaScriptEnabled")
 internal fun WebView.configureTuneveilWebSettings() {
@@ -186,6 +185,19 @@ internal fun createLoggingWebViewClient(): WebViewClient {
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             Log.d(WEBVIEW_DEBUG_TAG, "page started: $url")
+            view?.let { webView ->
+                val host = url?.toUri()?.host?.lowercase().orEmpty()
+                if (host == "accounts.spotify.com" &&
+                    !webView.settings.userAgentString.contains("Mobile", ignoreCase = true)
+                ) {
+                    // The desktop Linux UA can produce an unpainted auth page
+                    // in Xiaomi's WebView. Use a Chrome-style mobile UA for
+                    // authentication while keeping the desktop UA for playback.
+                    webView.settings.userAgentString = buildTuneveilAuthUserAgent(webView.context)
+                    webView.reload()
+                    return@let
+                }
+            }
             super.onPageStarted(view, url, favicon)
         }
 
@@ -622,6 +634,13 @@ private fun buildTuneveilDesktopUserAgent(defaultUserAgent: String): String {
     return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Safari/537.36"
 }
 
+private fun buildTuneveilAuthUserAgent(context: android.content.Context): String {
+    val defaultUserAgent = WebSettings.getDefaultUserAgent(context)
+    val chromeVersion = Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"
+    val androidVersion = Regex("""Android [^;,)]+""").find(defaultUserAgent)?.value ?: "Android 14"
+    return "Mozilla/5.0 (Linux; $androidVersion) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Mobile Safari/537.36"
+}
+
 private fun shouldOpenExternally(uri: Uri?): Boolean {
     val scheme = uri?.scheme?.lowercase().orEmpty()
     if (scheme.isBlank()) {
@@ -635,13 +654,6 @@ private fun shouldOpenExternally(uri: Uri?): Boolean {
     val host = uri?.host?.lowercase().orEmpty()
     if (host.isBlank()) {
         return false
-    }
-
-    // The authentication UI is rendered by Chrome's Custom Tab.  Xiaomi's
-    // System WebView can complete accounts.spotify.com navigation but leave
-    // that page unpainted, producing the black login screen.
-    if (AUTH_HOSTS.any { host == it || host.endsWith(".$it") }) {
-        return true
     }
 
     return INTERNAL_WEBVIEW_HOSTS.none { host == it || host.endsWith(".$it") }
