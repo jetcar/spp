@@ -24,6 +24,13 @@
 (function () {
   'use strict';
 
+  // Authentication pages must retain the untouched Web APIs.  In particular,
+  // do not install any player-state hook on explicit login/signup routes.
+  if (/\/(login|signup|authorize)(?:\/|$)/i.test(location.pathname)) {
+    console.log('[TuneveilAdBlock] auth route detected; hooks skipped');
+    return;
+  }
+
   // ── State ─────────────────────────────────────────────────────────────────
   var _originalFetch   = window.fetch;
   var _accessToken     = '';
@@ -133,19 +140,22 @@
   }
 
   // ── Hook fetch ───────────────────────────────────────────────────────────
-  window.fetch = function (url, init) {
-    var urlStr = _urlStr(url);
+  window.fetch = new Proxy(_originalFetch, {
+    apply: function (target, thisArg, args) {
+      var url = args[0];
+      var init = args[1];
+      var urlStr = _urlStr(url);
 
-    // Blockify's request filter redirects known ad media.  An empty response
-    // makes the player fail/advance without touching Spotify's other traffic.
-    if (_isKnownAdContentUrl(urlStr)) {
-      console.log('[TuneveilAdBlock] known ad media blocked');
-      return Promise.resolve(new Response('', { status: 200 }));
-    }
+      // Blockify's request filter redirects known ad media.  An empty response
+      // makes the player fail/advance without touching other traffic.
+      if (_isKnownAdContentUrl(urlStr)) {
+        console.log('[TuneveilAdBlock] known ad media blocked');
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
 
-    // Passively steal the access token from Spotify's own token request
-    if (urlStr.includes('get_access_token')) {
-      return _originalFetch.call(window, url, init).then(function (resp) {
+      // Passively steal the access token from the player's own token request.
+      if (urlStr.includes('get_access_token')) {
+        return Reflect.apply(target, thisArg, args).then(function (resp) {
         var clone = resp.clone();
         clone.json().then(function (j) {
           if (j && j['accessToken']) {
@@ -154,29 +164,31 @@
           }
         }).catch(function () {});
         return resp;
-      });
-    }
+        });
+      }
 
-    // Track device ID (needed for _getStates API)
-    if (urlStr.endsWith('/devices') && init && init.body) {
-      try {
-        var req = JSON.parse(init.body);
-        if (req.device && req.device.device_id) _deviceId = req.device.device_id;
-      } catch (_) {}
-    }
+      // Track device ID (needed for _getStates API).
+      if (urlStr.endsWith('/devices') && init && init.body) {
+        try {
+          var req = JSON.parse(init.body);
+          if (req.device && req.device.device_id) _deviceId = req.device.device_id;
+        } catch (_) {}
+      }
 
-    // Intercept state-machine responses
-    if (urlStr.includes('/state')) {
-      return _originalFetch.call(window, url, init).then(function (resp) {
-        return _patchFetchResponse(resp);
-      }).catch(function (e) {
-        console.error('[TuneveilAdBlock] fetch intercept error: ' + e);
-        return _originalFetch.call(window, url, init);
-      });
-    }
+      // Intercept state-machine responses while preserving native fetch
+      // receiver/arguments semantics for authentication and every other call.
+      if (urlStr.includes('/state')) {
+        return Reflect.apply(target, thisArg, args).then(function (resp) {
+          return _patchFetchResponse(resp);
+        }).catch(function (e) {
+          console.error('[TuneveilAdBlock] fetch intercept error: ' + e);
+          throw e;
+        });
+      }
 
-    return _originalFetch.call(window, url, init);
-  };
+      return Reflect.apply(target, thisArg, args);
+    }
+  });
 
   function _patchFetchResponse(resp) {
     var _origJson = resp.json.bind(resp);
