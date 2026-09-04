@@ -129,6 +129,16 @@
     return _knownAdContentIds.some(function (id) { return url.indexOf(id) >= 0; });
   }
 
+  // Login and consent screens do not render the player controls.  Keep the
+  // fetch/WebSocket wrappers inert until the authenticated player is present.
+  function _playerUiReady() {
+    return !!document.querySelector(
+      '[data-testid="control-button-playpause"],' +
+      '[data-testid="now-playing-bar"],' +
+      '[data-testid="now-playing-widget"]'
+    );
+  }
+
   async function _refreshToken() {
     try {
       var r = await _originalFetch.call(window,
@@ -194,6 +204,7 @@
     var _origJson = resp.json.bind(resp);
     resp.json = function () {
       return _origJson().then(async function (data) {
+        if (!_playerUiReady()) return data;
         var sm  = data['state_machine'];
         var ref = data['updated_state_ref'];
         _inspectPayload(data);
@@ -434,6 +445,7 @@
         try {
           if (typeof evt.data !== 'string') return;
           var msg = JSON.parse(evt.data);
+          if (!_playerUiReady()) return;
           _inspectPayload(msg);
           if (!msg || !Array.isArray(msg.payloads)) return;
           for (var i = 0; i < msg.payloads.length; i++) {
@@ -504,6 +516,15 @@
 
   var _uiAdMuted = false;
   function _syncUiAdState() {
+    if (!_playerUiReady()) {
+      if (_uiAdMuted) {
+        document.querySelectorAll('audio,video').forEach(function (m) {
+          try { m.muted = false; if (m.volume < 0.05) m.volume = 1; } catch (_) {}
+        });
+        _uiAdMuted = false;
+      }
+      return;
+    }
     var ad = _spotifyShowsAd();
     if (ad) {
       document.querySelectorAll('audio,video').forEach(function (m) {
