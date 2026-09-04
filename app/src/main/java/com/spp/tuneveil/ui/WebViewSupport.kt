@@ -16,8 +16,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.net.toUri
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 
 private const val WEBVIEW_DEBUG_TAG = "TuneveilWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
@@ -51,37 +49,33 @@ internal fun WebView.configureTuneveilWebSettings() {
     isVerticalScrollBarEnabled = true
     isHorizontalScrollBarEnabled = false
 
-    // Inject the ad-blocker script at document-start so our fetch/WebSocket
-    // hooks are in place before Spotify's own JavaScript runs.
-    // This mirrors what the "Blockify" Chrome extension does via chrome.scripting.
-    installAdBlockerAtDocumentStart()
 }
 
 /**
- * Installs the ad-blocker JavaScript at document-start using
- * [WebViewCompat.addDocumentStartJavaScript] (requires WebView 69+, API 24+).
- * Scoped to open.spotify.com only so it has no effect on any other page.
- * Falls back silently on older WebView versions.
+ * Installs the ad-blocker only after the authenticated player UI exists.
+ * Injecting at document-start interferes with Spotify's login/bootstrap page
+ * in some Android System WebView versions and can leave the WebView black.
  */
-@SuppressLint("RequiresFeature") // guarded by isFeatureSupported check inside
-private fun WebView.installAdBlockerAtDocumentStart() {
-    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-        try {
-            val script = context.resources
-                .openRawResource(com.spp.tuneveil.R.raw.tuneveil_ad_blocker)
-                .bufferedReader()
-                .readText()
-            WebViewCompat.addDocumentStartJavaScript(
-                this,
-                script,
-                setOf("https://open.spotify.com"),
-            )
-            Log.i(WEBVIEW_DEBUG_TAG, "ad-blocker document-start script installed")
-        } catch (e: Exception) {
-            Log.e(WEBVIEW_DEBUG_TAG, "failed to install ad-blocker script: $e")
+private fun WebView.installAdBlockerAfterPlayerReady(attempt: Int = 0) {
+    if (attempt >= 12 || url?.startsWith("https://open.spotify.com") != true) return
+
+    evaluateJavascript(
+        """(function(){return !!document.querySelector('[data-testid="control-button-playpause"],[data-testid="now-playing-bar"],[data-testid="now-playing-widget"]');})()""",
+    ) { ready ->
+        if (ready == "true") {
+            try {
+                val script = context.resources
+                    .openRawResource(com.spp.tuneveil.R.raw.tuneveil_ad_blocker)
+                    .bufferedReader()
+                    .readText()
+                evaluateJavascript(script, null)
+                Log.i(WEBVIEW_DEBUG_TAG, "ad-blocker installed after player/login readiness")
+            } catch (e: Exception) {
+                Log.e(WEBVIEW_DEBUG_TAG, "failed to install ad-blocker script: $e")
+            }
+        } else {
+            postDelayed({ installAdBlockerAfterPlayerReady(attempt + 1) }, 1_000L)
         }
-    } else {
-        Log.w(WEBVIEW_DEBUG_TAG, "addDocumentStartJavaScript not supported on this WebView version")
     }
 }
 
@@ -199,6 +193,7 @@ internal fun createLoggingWebViewClient(): WebViewClient {
             view?.let {
                 it.requestFocus()
                 installMediaActivationScript(it)
+                it.installAdBlockerAfterPlayerReady()
             }
             super.onPageFinished(view, url)
         }
