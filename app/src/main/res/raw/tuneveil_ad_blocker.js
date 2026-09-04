@@ -29,6 +29,11 @@
   var _accessToken     = '';
   var _deviceId        = '';
   var _tamperedIds     = [];
+  // Blockify also identifies ad media by the content IDs advertised in the
+  // track manifest.  This catches ad URLs that do not contain :ad:.
+  var _knownAdContentIds = [];
+  var _lastPublishedContentIds = '';
+  var _MAX_AD_CONTENT_IDS = 32;
 
   // ── Mutex: only one _manipulate() runs at a time ──────────────────────────
   var _manipulating    = false;
@@ -47,6 +52,76 @@
     return String(input);
   }
 
+  function _rememberAdContentId(value) {
+    if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(value)) return;
+    var idx = _knownAdContentIds.indexOf(value);
+    if (idx >= 0) _knownAdContentIds.splice(idx, 1);
+    _knownAdContentIds.push(value);
+    while (_knownAdContentIds.length > _MAX_AD_CONTENT_IDS) _knownAdContentIds.shift();
+  }
+
+  function _collectManifestIds(manifest) {
+    if (!manifest || typeof manifest !== 'object') return;
+    ['file_ids_mp3', 'file_ids_external', 'file_ids', 'alternatives'].forEach(function (groupName) {
+      var group = manifest[groupName];
+      if (!Array.isArray(group)) return;
+      group.forEach(function (entry) {
+        if (typeof entry === 'string') _rememberAdContentId(entry);
+        else if (entry) {
+          _rememberAdContentId(entry.file_id);
+          _rememberAdContentId(entry.fileId);
+          _rememberAdContentId(entry.id);
+        }
+      });
+    });
+  }
+
+  function _trackIsExplicitAd(track) {
+    if (!track) return false;
+    var m = track.metadata || {};
+    return [track.content_type, track.contentType, track.type, m.content_type,
+      m.contentType, m.is_ad, m.isAd, track.is_ad, track.isAd].some(function (v) {
+        return v === true || (typeof v === 'string' &&
+          ['AD', 'ADVERTISEMENT', 'TRUE'].indexOf(v.toUpperCase()) >= 0);
+      });
+  }
+
+  function _inspectStateMachine(sm) {
+    if (!sm || typeof sm !== 'object') return;
+    var groups = [sm.tracks, sm.track_list, sm.queue && sm.queue.tracks];
+    groups.forEach(function (tracks) {
+      if (!Array.isArray(tracks)) return;
+      tracks.forEach(function (track) {
+        if (_trackIsExplicitAd(track)) {
+          _collectManifestIds(track.manifest);
+          _rememberAdContentId(track.file_id);
+          _rememberAdContentId(track.fileId);
+        }
+      });
+    });
+    _publishAdContentIds();
+  }
+
+  function _inspectPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    _inspectStateMachine(payload.state_machine || payload.stateMachine);
+    if (Array.isArray(payload.payloads)) payload.payloads.forEach(function (p) {
+      _inspectStateMachine(p && (p.state_machine || p.stateMachine));
+    });
+  }
+
+  function _publishAdContentIds() {
+    if (!document.body) return;
+    var serialized = JSON.stringify(_knownAdContentIds);
+    if (serialized === _lastPublishedContentIds) return;
+    _lastPublishedContentIds = serialized;
+    document.body.setAttribute('data-blockify-ad-content-ids', serialized);
+  }
+
+  function _isKnownAdContentUrl(url) {
+    return _knownAdContentIds.some(function (id) { return url.indexOf(id) >= 0; });
+  }
+
   async function _refreshToken() {
     try {
       var r = await _originalFetch.call(window,
@@ -61,6 +136,13 @@
   window.fetch = function (url, init) {
     var urlStr = _urlStr(url);
 
+    // Blockify's request filter redirects known ad media.  An empty response
+    // makes the player fail/advance without touching Spotify's other traffic.
+    if (_isKnownAdContentUrl(urlStr)) {
+      console.log('[TuneveilAdBlock] known ad media blocked');
+      return Promise.resolve(new Response('', { status: 200 }));
+    }
+
     // Passively steal the access token from Spotify's own token request
     if (urlStr.includes('get_access_token')) {
       return _originalFetch.call(window, url, init).then(function (resp) {
@@ -68,7 +150,7 @@
         clone.json().then(function (j) {
           if (j && j['accessToken']) {
             _accessToken = j['accessToken'];
-            console.log('[SpotifyAdBlock] access token captured');
+            console.log('[TuneveilAdBlock] access token captured');
           }
         }).catch(function () {});
         return resp;
@@ -88,7 +170,7 @@
       return _originalFetch.call(window, url, init).then(function (resp) {
         return _patchFetchResponse(resp);
       }).catch(function (e) {
-        console.error('[SpotifyAdBlock] fetch intercept error: ' + e);
+        console.error('[TuneveilAdBlock] fetch intercept error: ' + e);
         return _originalFetch.call(window, url, init);
       });
     }
@@ -102,6 +184,7 @@
       return _origJson().then(async function (data) {
         var sm  = data['state_machine'];
         var ref = data['updated_state_ref'];
+        _inspectPayload(data);
         if (sm && ref != null) {
           data['state_machine'] = await _manipulateSafe(sm, ref['state_index'], false);
         }
@@ -156,7 +239,7 @@
         if (shortenedIdx[i]) continue; // already shortened in a previous pass – skip
 
         var adTrack = tracks[state['track']];
-        console.log('[SpotifyAdBlock] ad detected: ' + adTrack['metadata']['uri']);
+        console.log('[TuneveilAdBlock] ad detected: ' + adTrack['metadata']['uri']);
 
         var next = _getNextNonAd(sm, adTrack, i);
 
@@ -185,7 +268,7 @@
                 }
               }
             } catch (e) {
-              console.warn('[SpotifyAdBlock] _getStates failed: ' + e);
+              console.warn('[TuneveilAdBlock] _getStates failed: ' + e);
             }
           }
           // If still an ad after fetch attempt (or rate-limited), shorten it.
@@ -206,7 +289,7 @@
         }
 
         if (i === startIdx && !isWS && _tamperedIds.includes(state['state_id'])) {
-          console.log('[SpotifyAdBlock] ad removed ✓');
+          console.log('[TuneveilAdBlock] ad removed ✓');
           document.body && document.body.setAttribute('spotifyAdRemoved', Date.now());
         }
       }
@@ -253,7 +336,7 @@
     if (!t) return false;
     var uri = (t['metadata'] && t['metadata']['uri']) || '';
     if (uri.includes(':ad:')) return true;
-    if (t['content_type'] === 'AD') return true;
+    if (_trackIsExplicitAd(t)) return true;
     return false;
   }
 
@@ -262,12 +345,12 @@
   async function _getStates(smId, stateId) {
     var cacheKey = smId + '|' + stateId;
     if (_getStatesCache[cacheKey]) {
-      console.log('[SpotifyAdBlock] _getStates cache hit');
+      console.log('[TuneveilAdBlock] _getStates cache hit');
       return _getStatesCache[cacheKey];
     }
 
     if (!_deviceId || !_accessToken) {
-      console.warn('[SpotifyAdBlock] _getStates skipped – no deviceId or token yet');
+      console.warn('[TuneveilAdBlock] _getStates skipped – no deviceId or token yet');
       return null;
     }
 
@@ -295,7 +378,7 @@
       if (isNaN(retryAfterSec) || retryAfterSec < 1) retryAfterSec = 30;
       // Push the next-allowed timestamp forward by the full retry-after window.
       _lastGetStatesMs = Date.now() + (retryAfterSec * 1000) - _GET_STATES_MIN_INTERVAL_MS;
-      console.warn('[SpotifyAdBlock] _getStates 429 – Spotify says retry after ' +
+      console.warn('[TuneveilAdBlock] _getStates 429 – Spotify says retry after ' +
                    retryAfterSec + 's. Using shortenAd fallback until then.');
       return null;
     }
@@ -304,7 +387,7 @@
       return null; // caller will retry on next event with fresh token
     }
     if (r.status !== 200) {
-      console.warn('[SpotifyAdBlock] _getStates HTTP ' + r.status);
+      console.warn('[TuneveilAdBlock] _getStates HTTP ' + r.status);
       return null;
     }
 
@@ -332,19 +415,20 @@
   (function() {
     var _NativeWS = window.WebSocket;
 
-    function SpotifyWSWrapper(url, protocols) {
+    function TuneveilWSWrapper(url, protocols) {
       var ws = protocols ? new _NativeWS(url, protocols) : new _NativeWS(url);
 
       ws.addEventListener('message', function(evt) {
         try {
           if (typeof evt.data !== 'string') return;
           var msg = JSON.parse(evt.data);
+          _inspectPayload(msg);
           if (!msg || !Array.isArray(msg.payloads)) return;
           for (var i = 0; i < msg.payloads.length; i++) {
             var pl = msg.payloads[i];
             if (pl && pl.type === 'replace_state' && pl.state_machine) {
               if (_wsHasAdState(pl.state_machine)) {
-                console.log('[SpotifyAdBlock] WS replace_state contains ad – fast-forwarding');
+                console.log('[TuneveilAdBlock] WS replace_state contains ad – fast-forwarding');
                 _wsFastForwardAd(0);
               }
             }
@@ -352,15 +436,15 @@
         } catch(e) {}
       });
 
-      return ws; // returning ws (not this) makes "new SpotifyWSWrapper()" yield the native instance
+      return ws; // returning ws (not this) makes "new TuneveilWSWrapper()" yield the native instance
     }
 
     // Copy static constants (CONNECTING=0, OPEN=1, …)
     try {
-      Object.keys(_NativeWS).forEach(function(k) { SpotifyWSWrapper[k] = _NativeWS[k]; });
+      Object.keys(_NativeWS).forEach(function(k) { TuneveilWSWrapper[k] = _NativeWS[k]; });
     } catch(e) {}
-    SpotifyWSWrapper.prototype = _NativeWS.prototype;
-    window.WebSocket = SpotifyWSWrapper;
+    TuneveilWSWrapper.prototype = _NativeWS.prototype;
+    window.WebSocket = TuneveilWSWrapper;
   })();
 
   function _wsHasAdState(sm) {
@@ -395,7 +479,56 @@
     }, retries === 0 ? 150 : 500);
   }
 
-  console.log('[SpotifyAdBlock] fetch + safe-WS hooks installed');
+  // Page-world fallback used by current Blockify: Spotify sometimes exposes
+  // the ad in the UI before its media state reaches the next REST response.
+  // Mute only while an explicit ad marker is visible, then restore playback.
+  function _spotifyShowsAd() {
+    var panel = document.getElementById('Desktop_PanelContainer_Id');
+    if (!panel) return false;
+    if ((panel.textContent || '').indexOf('Your music will continue after the break') >= 0) return true;
+    return !!panel.querySelector('[data-testid="ad-companion-card"],'
+      + '[data-testid="ad-companion-card-tagline"],a[data-context-item-type="ad"]');
+  }
+
+  var _uiAdMuted = false;
+  function _syncUiAdState() {
+    var ad = _spotifyShowsAd();
+    if (ad) {
+      document.querySelectorAll('audio,video').forEach(function (m) {
+        try { m.muted = true; m.volume = 0; } catch (_) {}
+      });
+      _uiAdMuted = true;
+    } else if (_uiAdMuted) {
+      document.querySelectorAll('audio,video').forEach(function (m) {
+        try { m.muted = false; if (m.volume < 0.05) m.volume = 1; } catch (_) {}
+      });
+      _uiAdMuted = false;
+    }
+  }
+
+  function _startBlockifyUiFilter() {
+    if (!document.documentElement || window.__spotifyBlockifyUiFilter) return;
+    window.__spotifyBlockifyUiFilter = true;
+    var timer = null;
+    var schedule = function () {
+      if (timer !== null) return;
+      timer = setTimeout(function () { timer = null; _syncUiAdState(); }, 250);
+    };
+    new MutationObserver(schedule).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-context-item-type', 'data-testid'],
+      childList: true,
+      subtree: true
+    });
+    setInterval(_syncUiAdState, 1000);
+    _publishAdContentIds();
+    _syncUiAdState();
+  }
+
+  if (document.documentElement) _startBlockifyUiFilter();
+  else document.addEventListener('DOMContentLoaded', _startBlockifyUiFilter, { once: true });
+
+  console.log('[TuneveilAdBlock] fetch + safe-WS hooks installed');
 
 })();
 

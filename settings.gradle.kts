@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "spotify-webview"
+rootProject.name = "tuneveil"
 include(":app")

@@ -12,14 +12,14 @@
     <attribution android:tag="media_playback" android:label="@string/app_name" />
 
     <application
-        android:name=".SpotifyApp"
+        android:name=".TuneveilApp"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:icon="@drawable/ic_app_icon"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_app_icon"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SpotifyWebView">
+        android:theme="@style/Theme.TuneveilWebView">
 
         <activity
             android:hardwareAccelerated="true"

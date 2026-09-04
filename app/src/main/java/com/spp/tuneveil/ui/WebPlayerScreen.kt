@@ -1,4 +1,4 @@
-package com.spp.spotify.ui
+package com.spp.tuneveil.ui
 
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -61,12 +61,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import com.spp.spotify.media.MediaPlaybackService
-import com.spp.spotify.CrashRecoveryHandler
+import com.spp.tuneveil.media.MediaPlaybackService
+import com.spp.tuneveil.CrashRecoveryHandler
 
-private const val SPOTIFY_WEB_PLAYER_URL = "https://open.spotify.com/"
+private const val WEB_PLAYER_URL = "https://open.spotify.com/"
 
-// Spotify web-player data-testid selectors (unquoted attribute values work
+// Tuneveil web-player data-testid selectors (unquoted attribute values work
 // for simple identifiers in all modern WebView / Chromium builds)
 private const val SEL_PLAY_PAUSE   = "[data-testid=control-button-playpause]"
 private const val SEL_SKIP_BACK    = "[data-testid=control-button-skip-back]"
@@ -118,7 +118,7 @@ fun WebPlayerScreen() {
             // Give Spotify ~5 s to fully load and be interactive
             delay(5_000)
             if (wasPlayingOnCrash) {
-                webViewRef.value?.clickSpotifyButton(SEL_PLAY_PAUSE)
+                webViewRef.value?.clickPlayerButton(SEL_PLAY_PAUSE)
                 android.util.Log.i("CrashRecovery", "Auto-play triggered after crash restart")
             }
         }
@@ -223,9 +223,9 @@ fun WebPlayerScreen() {
                     // WebView.evaluateJavascript() MUST be called on the main thread.
                     // MediaSessionCompat.Callback fires on a background handler thread, so
                     // we must always dispatch back to main before touching the WebView.
-                    svc.onPlayPause    = { mainHandler.post { webViewRef.value?.clickSpotifyButton(SEL_PLAY_PAUSE) } }
-                    svc.onSkipNext     = { mainHandler.post { webViewRef.value?.clickSpotifyButton(SEL_SKIP_FORWARD) } }
-                    svc.onSkipPrevious = { mainHandler.post { webViewRef.value?.clickSpotifyButton(SEL_SKIP_BACK) } }
+                    svc.onPlayPause    = { mainHandler.post { webViewRef.value?.clickPlayerButton(SEL_PLAY_PAUSE) } }
+                    svc.onSkipNext     = { mainHandler.post { webViewRef.value?.clickPlayerButton(SEL_SKIP_FORWARD) } }
+                    svc.onSkipPrevious = { mainHandler.post { webViewRef.value?.clickPlayerButton(SEL_SKIP_BACK) } }
                 }
             }
             override fun onServiceDisconnected(name: ComponentName?) {
@@ -248,14 +248,14 @@ fun WebPlayerScreen() {
                 try {
                     context.unbindService(conn)
                 } catch (e: IllegalArgumentException) {
-                    android.util.Log.w("SpotifyWV", "unbindService failed (service was not registered): ${e.message}")
+                    android.util.Log.w("TuneveilWV", "unbindService failed (service was not registered): ${e.message}")
                 }
             }
         }
     }
 
     // Periodically check for and skip Spotify ads.
-    // Dump DOM state on first detection so selectors can be verified via Logcat (tag SpotifyWV).
+    // Dump DOM state on first detection so selectors can be verified via Logcat (tag TuneveilWV).
     // Also re-dump whenever a new "detected-no-media" case appears (audio element missing).
     LaunchedEffect(Unit) {
         var dumped = false
@@ -264,7 +264,7 @@ fun WebPlayerScreen() {
             webViewRef.value?.skipAdIfPresent { status ->
                 val isAdEvent = status != "no-ad" && status != "unmuted-after-ad"
                 if (isAdEvent) {
-                    android.util.Log.i("SpotifyWV", "ad-skip-poll: $status")
+                    android.util.Log.i("TuneveilWV", "ad-skip-poll: $status")
                     if (!dumped) {
                         dumped = true
                         webViewRef.value?.dumpNowPlayingState()
@@ -287,12 +287,12 @@ fun WebPlayerScreen() {
             factory = { context ->
                 WebView(context).apply {
                     webViewRef.value = this
-                    configureSpotifyWebSettings()
+                    configureTuneveilWebSettings()
                     webViewClient = createLoggingWebViewClient()
                     webChromeClient = createLoggingWebChromeClient()
                     onResume()
                     resumeTimers()
-                    loadUrl(SPOTIFY_WEB_PLAYER_URL)
+                    loadUrl(WEB_PLAYER_URL)
                 }
             },
             update = { webView -> webViewRef.value = webView },
@@ -308,14 +308,14 @@ fun WebPlayerScreen() {
                 .padding(end = 12.dp, top = 2.dp),
         ) {
             IconButton(
-                onClick = { webViewRef.value?.loadUrl(SPOTIFY_WEB_PLAYER_URL) },
+                onClick = { webViewRef.value?.loadUrl(WEB_PLAYER_URL) },
                 modifier = Modifier
                     .background(Color(0x66000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                     .size(32.dp),
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "Reload Spotify",
+                    contentDescription = "Reload Tuneveil",
                     tint = Color.White,
                     modifier = Modifier.size(18.dp),
                 )
@@ -357,20 +357,20 @@ fun WebPlayerScreen() {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0)
             },
             onPrevious = {
-                webViewRef.value?.clickSpotifyButton(SEL_SKIP_BACK)
+                webViewRef.value?.clickPlayerButton(SEL_SKIP_BACK)
             },
             onPlayPause = {
                 webViewRef.value?.let { wv ->
-                    wv.clickSpotifyButton(SEL_PLAY_PAUSE)
+                    wv.clickPlayerButton(SEL_PLAY_PAUSE)
                     // Re-query state shortly after the click so the icon reflects reality
                     wv.postDelayed({ wv.queryIsPlaying { playing -> isPlaying.value = playing } }, 400)
                 }
             },
             onNext = {
-                webViewRef.value?.clickSpotifyButton(SEL_SKIP_FORWARD)
+                webViewRef.value?.clickPlayerButton(SEL_SKIP_FORWARD)
             },
             onAddToFavorites = {
-                webViewRef.value?.clickSpotifyButton(SEL_ADD_TO_LIKED)
+                webViewRef.value?.clickPlayerButton(SEL_ADD_TO_LIKED)
                 // Re-query liked state shortly after the click so the icon updates
                 webViewRef.value?.postDelayed({
                     webViewRef.value?.queryIsLiked { liked -> if (liked != null) isLiked.value = liked }
@@ -529,7 +529,7 @@ private fun PlaybackOverlay(
                                       else Icons.Rounded.FavoriteBorder,
                         contentDescription = if (isLiked == true) "Remove from favorites"
                                              else "Add to favorites",
-                        tint = if (isLiked == true) Color(0xFF1DB954) // Spotify green
+                        tint = if (isLiked == true) Color(0xFF1DB954) // Tuneveil green
                                else Color.White,
                         modifier = Modifier.size(22.dp),
                     )

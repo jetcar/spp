@@ -1,4 +1,4 @@
-package com.spp.spotify
+package com.spp.tuneveil
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -12,7 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.spp.spotify.ui.WebPlayerScreen
+import com.spp.tuneveil.ui.WebPlayerScreen
 
 class MainActivity : ComponentActivity() {
 

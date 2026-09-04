@@ -1,4 +1,4 @@
-package com.spp.spotify.media
+package com.spp.tuneveil.media
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -18,8 +18,8 @@ import androidx.core.app.ServiceCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
-import com.spp.spotify.MainActivity
-import com.spp.spotify.R
+import com.spp.tuneveil.MainActivity
+import com.spp.tuneveil.R
 
 /**
  * Foreground service that owns the [MediaSessionCompat] and posts a
@@ -80,7 +80,7 @@ class MediaPlaybackService : Service() {
         }
 
         ServiceCompat.startForeground(
-            this, NOTIF_ID, buildNotification(false, "Spotify", ""),
+            this, NOTIF_ID, buildNotification(false, "Tuneveil", ""),
             foregroundServiceType,
         )
     }
@@ -115,7 +115,7 @@ class MediaPlaybackService : Service() {
         mediaSession.setPlaybackState(buildState(isPlaying, positionMs))
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE,  title.ifBlank  { "Spotify" })
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE,  title.ifBlank  { "Tuneveil" })
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
                 .apply { if (durationMs > 0) putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs) }
                 .build(),
@@ -165,7 +165,7 @@ class MediaPlaybackService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title.ifBlank { "Spotify" })
+            .setContentTitle(title.ifBlank { "Tuneveil" })
             .setContentText(artist)
             .setContentIntent(contentIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -215,7 +215,7 @@ class MediaPlaybackService : Service() {
             "Media Playback",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Spotify web player controls"
+            description = "Tuneveil web player controls"
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -223,8 +223,8 @@ class MediaPlaybackService : Service() {
 
     // ------------------------------------------------------------------
     companion object {
-        private const val SESSION_TAG = "SpotifyWebPlayer"
-        private const val CHANNEL_ID  = "spotify_webview_playback"
+        private const val SESSION_TAG = "TuneveilWebPlayer"
+        private const val CHANNEL_ID  = "tuneveil_webview_playback"
         const val NOTIF_ID = 1001
     }
 }

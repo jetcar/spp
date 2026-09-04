@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.spp.spotify"
+    namespace = "com.spp.tuneveil"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.spp.spotify"
+        applicationId = "com.spp.tuneveil"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

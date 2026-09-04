@@ -1,4 +1,4 @@
-package com.spp.spotify.ui
+package com.spp.tuneveil.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
@@ -19,14 +19,14 @@ import androidx.core.net.toUri
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 
-private const val WEBVIEW_DEBUG_TAG = "SpotifyWV"
+private const val WEBVIEW_DEBUG_TAG = "TuneveilWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
 
 @SuppressLint("SetJavaScriptEnabled")
-internal fun WebView.configureSpotifyWebSettings() {
+internal fun WebView.configureTuneveilWebSettings() {
     CookieManager.getInstance().apply {
         setAcceptCookie(true)
-        setAcceptThirdPartyCookies(this@configureSpotifyWebSettings, true)
+        setAcceptThirdPartyCookies(this@configureTuneveilWebSettings, true)
         flush()
     }
 
@@ -37,7 +37,7 @@ internal fun WebView.configureSpotifyWebSettings() {
         mediaPlaybackRequiresUserGesture = false
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         javaScriptCanOpenWindowsAutomatically = true
-        userAgentString = buildSpotifyDesktopUserAgent(userAgentString)
+        userAgentString = buildTuneveilDesktopUserAgent(userAgentString)
         useWideViewPort = true
         loadWithOverviewMode = true
         loadsImagesAutomatically = true
@@ -68,7 +68,7 @@ private fun WebView.installAdBlockerAtDocumentStart() {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
         try {
             val script = context.resources
-                .openRawResource(com.spp.spotify.R.raw.spotify_ad_blocker)
+                .openRawResource(com.spp.tuneveil.R.raw.tuneveil_ad_blocker)
                 .bufferedReader()
                 .readText()
             WebViewCompat.addDocumentStartJavaScript(
@@ -142,7 +142,7 @@ internal fun createLoggingWebChromeClient(): WebChromeClient {
             }
 
             popupWebView = WebView(parentWebView.context).apply {
-                configureSpotifyWebSettings()
+                configureTuneveilWebSettings()
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
                         view: WebView?,
@@ -336,7 +336,7 @@ internal fun WebView.dumpNowPlayingState() {
  *    record the muted state in `window.__spotifyAdMuted`.
  * 4. On subsequent calls with no ad detected, restore audio if it was muted.
  *
- * [callback] receives a status string logged under tag `SpotifyWV`.
+ * [callback] receives a status string logged under tag `TuneveilWV`.
  */
 internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
     evaluateJavascript(
@@ -497,8 +497,8 @@ internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
 // JavaScript bridge helpers — called from the native playback overlay
 // ---------------------------------------------------------------------------
 
-/** Clicks a Spotify web-player control identified by its CSS [selector]. */
-internal fun WebView.clickSpotifyButton(selector: String) {
+/** Clicks a Tuneveil web-player control identified by its CSS [selector]. */
+internal fun WebView.clickPlayerButton(selector: String) {
     evaluateJavascript(
         """(function(){var b=document.querySelector('$selector');if(b){b.click();}})();""",
         null,
@@ -564,7 +564,7 @@ internal fun WebView.queryIsLiked(callback: (Boolean?) -> Unit) {
 
 /**
  * Queries title, artist, current playback position (ms) and track duration (ms)
- * from the Spotify web player's now-playing bar and the page's <audio> element.
+ * from the Tuneveil web player's now-playing bar and the page's <audio> element.
  * Position and duration are -1 when unavailable.
  */
 internal fun WebView.queryTrackInfo(
@@ -598,6 +598,10 @@ internal fun WebView.queryTrackInfo(
 // Known Spotify / ad-network URL patterns to block at the network layer.
 // These URLs are only ever used to serve ad audio or ad tracking pixels.
 private val AD_NETWORK_URL_PATTERNS = listOf(
+    "adstudio-assets.scdn.co/mp3/",
+    "adstudio-assets.scdn.co/mp3-ad/",
+    "2mdn.net",
+    "amillionads.com",
     "audio-ads.spotify.com",
     "adswizz.com",
     "adeventtracker.spotify.com",
@@ -615,7 +619,7 @@ private fun isAdNetworkUrl(url: String): Boolean =
 private fun emptyResponse(): WebResourceResponse =
     WebResourceResponse("text/plain", "utf-8", 200, "OK", emptyMap(), "".byteInputStream())
 
-private fun buildSpotifyDesktopUserAgent(defaultUserAgent: String): String {
+private fun buildTuneveilDesktopUserAgent(defaultUserAgent: String): String {
     val chromeVersion =
         Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"
 

@@ -1,4 +1,4 @@
-package com.spp.spotify
+package com.spp.tuneveil
 
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -12,7 +12,7 @@ import android.util.Log
  * persists current playback state, schedules an automatic restart via [AlarmManager],
  * then kills the process cleanly.
  *
- * Usage: call [install] once from [SpotifyApp.onCreate].
+ * Usage: call [install] once from [TuneveilApp.onCreate].
  */
 class CrashRecoveryHandler(
     private val context: Context,
@@ -61,7 +61,7 @@ class CrashRecoveryHandler(
         const val KEY_CRASH_RECOVERY    = "crash_recovery_pending"
         const val KEY_WAS_PLAYING       = "was_playing"
 
-        /** Install the global crash handler. Call once from [SpotifyApp.onCreate]. */
+        /** Install the global crash handler. Call once from [TuneveilApp.onCreate]. */
         fun install(context: Context) {
             val default = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler(
