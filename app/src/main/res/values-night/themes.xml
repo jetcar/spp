@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spotify Accounts currently mis-renders under MIUI's forced dark-mode
+         treatment of embedded WebViews. Keep the host configuration light so
+         the page receives a consistent prefers-color-scheme value. -->
+    <style name="Theme.TuneveilWebView" parent="Theme.AppCompat.Light.NoActionBar" />
+</resources>

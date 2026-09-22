@@ -288,8 +288,12 @@ fun WebPlayerScreen() {
                 WebView(context).apply {
                     webViewRef.value = this
                     configureTuneveilWebSettings()
-                    webViewClient = createLoggingWebViewClient()
-                    webChromeClient = createLoggingWebChromeClient()
+                    webViewClient = createLoggingWebViewClient(
+                        onAuthenticationNavigation = { url -> context.startActivity(com.spp.tuneveil.AuthenticationActivity.intent(context, url)) },
+                    )
+                    webChromeClient = createLoggingWebChromeClient(
+                        onAuthenticationPopup = { url -> context.startActivity(com.spp.tuneveil.AuthenticationActivity.intent(context, url)) },
+                    )
                     onResume()
                     resumeTimers()
                     loadUrl(WEB_PLAYER_URL)
@@ -377,6 +381,7 @@ fun WebPlayerScreen() {
                 }, 400)
             },
         )
+
     }
 
     DisposableEffect(lifecycleOwner) {

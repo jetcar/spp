@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Message
+import android.os.Build
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -35,13 +36,24 @@ internal fun WebView.configureTuneveilWebSettings() {
         mediaPlaybackRequiresUserGesture = false
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         javaScriptCanOpenWindowsAutomatically = true
-        userAgentString = buildTuneveilDesktopUserAgent(userAgentString)
+        // Spotify's current Web Player can render blank in newer Xiaomi
+        // Android System WebView builds when presented with a desktop Linux UA.
+        userAgentString = buildTuneveilMobileUserAgent(context)
         useWideViewPort = true
         loadWithOverviewMode = true
         loadsImagesAutomatically = true
         cacheMode = WebSettings.LOAD_DEFAULT
         allowContentAccess = true
         setSupportMultipleWindows(true)
+        // MIUI's forced darkening turns Spotify Accounts into black text on a
+        // black background even though the form has loaded.  Let the page own
+        // its colour scheme instead.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            isAlgorithmicDarkeningAllowed = false
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            forceDark = WebSettings.FORCE_DARK_OFF
+        }
     }
 
     isFocusable = true
@@ -79,7 +91,9 @@ private fun WebView.installAdBlockerAfterPlayerReady(attempt: Int = 0) {
     }
 }
 
-internal fun createLoggingWebChromeClient(): WebChromeClient {
+internal fun createLoggingWebChromeClient(
+    onAuthenticationPopup: ((String) -> Unit)? = null,
+): WebChromeClient {
     return object : WebChromeClient() {
         override fun onPermissionRequest(request: PermissionRequest?) {
             if (request == null) {
@@ -120,10 +134,15 @@ internal fun createLoggingWebChromeClient(): WebChromeClient {
 
                 Log.i(WEBVIEW_DEBUG_TAG, "popup navigation: $uri")
 
-                if (shouldOpenExternally(uri)) {
+                if (isAuthenticationUrl(url) && onAuthenticationPopup != null) {
+                    // Spotify opens sign-in in a secondary window.  Keeping that window
+                    // separate avoids tearing down the already-rendered player WebView.
+                    onAuthenticationPopup(url)
+                } else if (shouldOpenExternally(uri)) {
                     openUrlOutsideWebView(parentWebView.context, url)
                 } else {
                     parentWebView.post {
+                        parentWebView.applyNavigationUserAgent(uri)
                         parentWebView.loadUrl(url)
                     }
                 }
@@ -168,10 +187,17 @@ internal fun createLoggingWebChromeClient(): WebChromeClient {
     }
 }
 
-internal fun createLoggingWebViewClient(): WebViewClient {
+internal fun createLoggingWebViewClient(
+    onAuthenticationNavigation: ((String) -> Unit)? = null,
+): WebViewClient {
     return object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url
+            val url = uri?.toString()
+            if (isAuthenticationUrl(url) && onAuthenticationNavigation != null) {
+                onAuthenticationNavigation(url!!)
+                return true
+            }
             if (shouldOpenExternally(uri)) {
                 Log.i(WEBVIEW_DEBUG_TAG, "opening outside WebView: $uri")
                 view?.context?.let { context ->
@@ -180,24 +206,16 @@ internal fun createLoggingWebViewClient(): WebViewClient {
                 return true
             }
 
+            if (view?.applyNavigationUserAgent(uri) == true) {
+                view.loadUrl(uri.toString())
+                return true
+            }
+
             return super.shouldOverrideUrlLoading(view, request)
         }
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             Log.d(WEBVIEW_DEBUG_TAG, "page started: $url")
-            view?.let { webView ->
-                val host = url?.toUri()?.host?.lowercase().orEmpty()
-                if (host == "accounts.spotify.com" &&
-                    !webView.settings.userAgentString.contains("Mobile", ignoreCase = true)
-                ) {
-                    // The desktop Linux UA can produce an unpainted auth page
-                    // in Xiaomi's WebView. Use a Chrome-style mobile UA for
-                    // authentication while keeping the desktop UA for playback.
-                    webView.settings.userAgentString = buildTuneveilAuthUserAgent(webView.context)
-                    webView.reload()
-                    return@let
-                }
-            }
             super.onPageStarted(view, url, favicon)
         }
 
@@ -205,8 +223,9 @@ internal fun createLoggingWebViewClient(): WebViewClient {
             Log.d(WEBVIEW_DEBUG_TAG, "page finished: $url")
             view?.let {
                 it.requestFocus()
-                installMediaActivationScript(it)
-                it.installAdBlockerAfterPlayerReady()
+                if (!isAuthenticationUrl(url)) {
+                    installMediaActivationScript(it)
+                }
             }
             super.onPageFinished(view, url)
         }
@@ -216,6 +235,9 @@ internal fun createLoggingWebViewClient(): WebViewClient {
             request: WebResourceRequest?,
         ): WebResourceResponse? {
             val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+            // Chromium invokes this callback on a background thread.  Do not
+            // read view.url (or any other WebView property) here: Xiaomi's
+            // System WebView treats that as a fatal wrong-thread call.
             // Block known Spotify ad-audio and ad-tracking endpoints at network level.
             // This is a second-layer defence; the primary layer is the JS state-machine hook.
             if (isAdNetworkUrl(url)) {
@@ -627,19 +649,90 @@ private fun isAdNetworkUrl(url: String): Boolean =
 private fun emptyResponse(): WebResourceResponse =
     WebResourceResponse("text/plain", "utf-8", 200, "OK", emptyMap(), "".byteInputStream())
 
-private fun buildTuneveilDesktopUserAgent(defaultUserAgent: String): String {
-    val chromeVersion =
-        Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"
-
-    return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Safari/537.36"
-}
-
-private fun buildTuneveilAuthUserAgent(context: android.content.Context): String {
+private fun buildTuneveilMobileUserAgent(context: android.content.Context): String {
     val defaultUserAgent = WebSettings.getDefaultUserAgent(context)
     val chromeVersion = Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"
     val androidVersion = Regex("""Android [^;,)]+""").find(defaultUserAgent)?.value ?: "Android 14"
     return "Mozilla/5.0 (Linux; $androidVersion) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Mobile Safari/537.36"
 }
+
+/**
+ * Handles the dedicated, in-app Spotify sign-in window.  Cookies are shared by
+ * Android's CookieManager, so returning to the player after an accounts flow
+ * needs only a player reload, not a manual cookie transfer.
+ */
+internal fun createAuthenticationWebViewClient(
+    onAuthenticationComplete: (String) -> Unit,
+): WebViewClient {
+    return object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            val url = request?.url?.toString() ?: return false
+            val uri = request.url
+            if (isPlayerUrl(url)) {
+                CookieManager.getInstance().flush()
+                onAuthenticationComplete(url)
+                return true
+            }
+            if (shouldOpenExternally(uri)) {
+                Log.i(WEBVIEW_DEBUG_TAG, "opening outside WebView: $uri")
+                view?.context?.let { openUrlOutsideWebView(it, url) }
+                return true
+            }
+            return false
+        }
+
+        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+            Log.d(WEBVIEW_DEBUG_TAG, "authentication page started: $url")
+            if (isPlayerUrl(url)) {
+                CookieManager.getInstance().flush()
+                onAuthenticationComplete(url!!)
+                return
+            }
+            super.onPageStarted(view, url, favicon)
+        }
+
+        override fun onPageFinished(view: WebView?, url: String?) {
+            Log.d(WEBVIEW_DEBUG_TAG, "authentication page finished: $url")
+            view?.apply {
+                requestFocus()
+                evaluateJavascript(
+                    """(function(){var b=document.body;var s=getComputedStyle(b);return JSON.stringify({title:document.title,text:(b&&b.innerText||'').slice(0,300),display:s&&s.display,visibility:s&&s.visibility,children:b&&b.childElementCount});})()""",
+                ) { state -> Log.d(WEBVIEW_DEBUG_TAG, "authentication DOM: $state") }
+            }
+            super.onPageFinished(view, url)
+        }
+
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: WebResourceError?,
+        ) {
+            Log.e(
+                WEBVIEW_DEBUG_TAG,
+                "authentication error url=${request?.url} code=${error?.errorCode} description=${error?.description}",
+            )
+            super.onReceivedError(view, request, error)
+        }
+    }
+}
+
+/** Select the user agent before a top-level player/auth navigation begins. */
+private fun WebView.applyNavigationUserAgent(uri: Uri?): Boolean {
+    val host = uri?.host?.lowercase().orEmpty()
+    val userAgent = when (host) {
+        "accounts.spotify.com", "open.spotify.com" -> buildTuneveilMobileUserAgent(context)
+        else -> return false
+    }
+    if (settings.userAgentString == userAgent) return false
+    settings.userAgentString = userAgent
+    return true
+}
+
+private fun isAuthenticationUrl(url: String?): Boolean =
+    url?.toUri()?.host?.lowercase() == "accounts.spotify.com"
+
+private fun isPlayerUrl(url: String?): Boolean =
+    url?.toUri()?.host?.lowercase() == "open.spotify.com"
 
 private fun shouldOpenExternally(uri: Uri?): Boolean {
     val scheme = uri?.scheme?.lowercase().orEmpty()
