@@ -24,6 +24,8 @@
 (function () {
   'use strict';
 
+  if (location.hostname !== 'open.spotify.com' || window.__tuneveilFilterInstalled) return;
+
   // Authentication pages must retain the untouched Web APIs.  In particular,
   // do not install any player-state hook on explicit login/signup routes.
   if (/\/(login|signup|authorize)(?:\/|$)/i.test(location.pathname)) {
@@ -32,6 +34,7 @@
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
+  window.__tuneveilFilterInstalled = true;
   var _originalFetch   = window.fetch;
   var _accessToken     = '';
   var _deviceId        = '';

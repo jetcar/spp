@@ -17,12 +17,14 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.net.toUri
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
 private const val WEBVIEW_DEBUG_TAG = "TuneveilWV"
 private val INTERNAL_WEBVIEW_HOSTS = setOf("spotify.com", "scdn.co")
 
 @SuppressLint("SetJavaScriptEnabled")
-internal fun WebView.configureTuneveilWebSettings() {
+internal fun WebView.configureTuneveilWebSettings(desktopPlayer: Boolean = false) {
     CookieManager.getInstance().apply {
         setAcceptCookie(true)
         setAcceptThirdPartyCookies(this@configureTuneveilWebSettings, true)
@@ -36,9 +38,8 @@ internal fun WebView.configureTuneveilWebSettings() {
         mediaPlaybackRequiresUserGesture = false
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         javaScriptCanOpenWindowsAutomatically = true
-        // Spotify's current Web Player can render blank in newer Xiaomi
-        // Android System WebView builds when presented with a desktop Linux UA.
-        userAgentString = buildTuneveilMobileUserAgent(context)
+        userAgentString = if (desktopPlayer) buildTuneveilDesktopUserAgent(context)
+            else buildTuneveilMobileUserAgent(context)
         useWideViewPort = true
         loadWithOverviewMode = true
         loadsImagesAutomatically = true
@@ -61,6 +62,12 @@ internal fun WebView.configureTuneveilWebSettings() {
     isVerticalScrollBarEnabled = true
     isHorizontalScrollBarEnabled = false
 
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        val observer = context.resources.openRawResource(com.spp.tuneveil.R.raw.mobile_ad_observer)
+            .bufferedReader().use { it.readText() }
+        WebViewCompat.addDocumentStartJavaScript(this, observer, setOf("https://open.spotify.com"))
+    }
+
 }
 
 /**
@@ -69,10 +76,10 @@ internal fun WebView.configureTuneveilWebSettings() {
  * in some Android System WebView versions and can leave the WebView black.
  */
 private fun WebView.installAdBlockerAfterPlayerReady(attempt: Int = 0) {
-    if (attempt >= 12 || url?.startsWith("https://open.spotify.com") != true) return
+    if (attempt >= 60 || !isAttachedToWindow || !isPlayerUrl(url)) return
 
     evaluateJavascript(
-        """(function(){return !!document.querySelector('[data-testid="control-button-playpause"],[data-testid="now-playing-bar"],[data-testid="now-playing-widget"]');})()""",
+        """(function(){return location.hostname === 'open.spotify.com' && !!document.querySelector('[data-testid="control-button-playpause"]') && !!document.querySelector('[data-testid="user-widget-link"],[data-testid="user-widget-avatar"]');})()""",
     ) { ready ->
         if (ready == "true") {
             try {
@@ -225,6 +232,7 @@ internal fun createLoggingWebViewClient(
                 it.requestFocus()
                 if (!isAuthenticationUrl(url)) {
                     installMediaActivationScript(it)
+                    it.installAdBlockerAfterPlayerReady()
                 }
             }
             super.onPageFinished(view, url)
@@ -242,6 +250,16 @@ internal fun createLoggingWebViewClient(
             // This is a second-layer defence; the primary layer is the JS state-machine hook.
             if (isAdNetworkUrl(url)) {
                 Log.i(WEBVIEW_DEBUG_TAG, "ad-network request blocked: $url")
+                if (isAdAudioUrl(url)) {
+                    view?.post {
+                        if (view.isAttachedToWindow) {
+                            view.evaluateJavascript(
+                                "window.__tuneveilSkipBlockedAd && window.__tuneveilSkipBlockedAd();",
+                                null,
+                            )
+                        }
+                    }
+                }
                 return emptyResponse()
             }
             return super.shouldInterceptRequest(view, request)
@@ -376,17 +394,18 @@ internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
           var skipBtn = document.querySelector(
             '[data-testid="skip-ad-button"],' +
             '[data-testid="ad-skip-button"],' +
-            '[data-testid="skip-button"],' +
             '[class*="skip-ad"],' +
-            '[aria-label*="skip" i]'
+            '[aria-label="skip ad" i],' +
+            '[aria-label="skip ads" i],'+
+            '[aria-label="skip advertisement" i]'
           );
-          // Broaden: scan visible buttons/spans for "Skip" text
+          // Never click generic Skip/Skip next controls during normal playback.
           if (!skipBtn || skipBtn.offsetParent === null) {
             var allBtns = document.querySelectorAll('button,span[role="button"]');
             for (var b = 0; b < allBtns.length; b++) {
               var bt = allBtns[b];
               if (bt.offsetParent !== null &&
-                  /^skip/i.test((bt.textContent || '').trim())) {
+                  /^skip (?:ads?|advertisements?)$/i.test((bt.textContent || '').trim())) {
                 skipBtn = bt; break;
               }
             }
@@ -529,10 +548,24 @@ internal fun WebView.skipAdIfPresent(callback: ((String) -> Unit)? = null) {
 
 /** Clicks a Tuneveil web-player control identified by its CSS [selector]. */
 internal fun WebView.clickPlayerButton(selector: String) {
+    val mediaAction = when (selector) {
+        "[data-testid=control-button-skip-forward]" -> "nexttrack"
+        "[data-testid=control-button-skip-back]" -> "previoustrack"
+        else -> null
+    }
+    val effectiveSelector = when (selector) {
+        "[data-testid=control-button-playpause]" ->
+            "[data-testid=control-button-playpause],[data-testid=play-button][aria-label=Pause],[data-testid=play-button]"
+        else -> selector
+    }
+    val mediaActionScript = mediaAction?.let {
+        "if(window.__tuneveilRunMediaAction&&window.__tuneveilRunMediaAction('$it')){return 'media-session';}"
+    }.orEmpty()
     evaluateJavascript(
-        """(function(){var b=document.querySelector('$selector');if(b){b.click();}})();""",
-        null,
-    )
+        """(function(){$mediaActionScript var b=document.querySelector('$effectiveSelector');if(b){b.click();return 'dom';}return 'missing';})();""",
+    ) { result ->
+        Log.d(WEBVIEW_DEBUG_TAG, "player control selector=$selector result=$result")
+    }
 }
 
 /**
@@ -544,7 +577,9 @@ internal fun WebView.queryIsPlaying(callback: (Boolean) -> Unit) {
     evaluateJavascript(
         """
         (function(){
-          var b=document.querySelector('[data-testid=control-button-playpause]');
+          var b=document.querySelector('[data-testid=control-button-playpause]') ||
+                document.querySelector('[data-testid=play-button][aria-label=Pause]') ||
+                document.querySelector('[data-testid=play-button]');
           if(!b){return 'unknown';}
           var a=(b.getAttribute('aria-label')||'').toLowerCase();
           return a.indexOf('pause')>=0?'playing':'paused';
@@ -645,6 +680,16 @@ private val AD_NETWORK_URL_PATTERNS = listOf(
 private fun isAdNetworkUrl(url: String): Boolean =
     AD_NETWORK_URL_PATTERNS.any { url.contains(it, ignoreCase = true) }
 
+private val AD_AUDIO_URL_PATTERNS = listOf(
+    "adstudio-assets.scdn.co/mp3/",
+    "adstudio-assets.scdn.co/mp3-ad/",
+    "audio-ads.spotify.com",
+    "audio-fa.scdn.co/ads/",
+)
+
+private fun isAdAudioUrl(url: String): Boolean =
+    AD_AUDIO_URL_PATTERNS.any { url.contains(it, ignoreCase = true) }
+
 /** Returns a 200 OK response with an empty body — used to silently block requests. */
 private fun emptyResponse(): WebResourceResponse =
     WebResourceResponse("text/plain", "utf-8", 200, "OK", emptyMap(), "".byteInputStream())
@@ -652,8 +697,14 @@ private fun emptyResponse(): WebResourceResponse =
 private fun buildTuneveilMobileUserAgent(context: android.content.Context): String {
     val defaultUserAgent = WebSettings.getDefaultUserAgent(context)
     val chromeVersion = Regex("""Chrome/[\d.]+""").find(defaultUserAgent)?.value ?: "Chrome/126.0.0.0"
-    val androidVersion = Regex("""Android [^;,)]+""").find(defaultUserAgent)?.value ?: "Android 14"
-    return "Mozilla/5.0 (Linux; $androidVersion) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Mobile Safari/537.36"
+    // Match Chrome's reduced Android UA, which was verified to play locally.
+    return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) $chromeVersion Mobile Safari/537.36"
+}
+
+private fun buildTuneveilDesktopUserAgent(context: android.content.Context): String {
+    val version = Regex("""Chrome/[\d.]+""").find(WebSettings.getDefaultUserAgent(context))?.value
+        ?: "Chrome/126.0.0.0"
+    return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) $version Safari/537.36"
 }
 
 /**
@@ -720,7 +771,8 @@ internal fun createAuthenticationWebViewClient(
 private fun WebView.applyNavigationUserAgent(uri: Uri?): Boolean {
     val host = uri?.host?.lowercase().orEmpty()
     val userAgent = when (host) {
-        "accounts.spotify.com", "open.spotify.com" -> buildTuneveilMobileUserAgent(context)
+        "accounts.spotify.com" -> buildTuneveilMobileUserAgent(context)
+        "open.spotify.com" -> buildTuneveilMobileUserAgent(context)
         else -> return false
     }
     if (settings.userAgentString == userAgent) return false

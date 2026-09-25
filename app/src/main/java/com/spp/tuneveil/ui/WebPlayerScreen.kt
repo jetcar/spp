@@ -1,7 +1,5 @@
 package com.spp.tuneveil.ui
 
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.content.ComponentName
 import android.content.Context
@@ -155,38 +153,8 @@ fun WebPlayerScreen() {
         }
     }
 
-    // ── Audio focus ──────────────────────────────────────────────────────────
-    // Managed here (not in MainActivity) so we have direct access to webViewRef
-    // and can actually pause/resume audio when focus changes.
-    DisposableEffect(Unit) {
-        val focusAudioManager = context.getSystemService(AudioManager::class.java)
-
-        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build(),
-            )
-            .setOnAudioFocusChangeListener { focusChange ->
-                when (focusChange) {
-                    AudioManager.AUDIOFOCUS_LOSS,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                        // Another app (or a second instance) took audio focus — pause media
-                        webViewRef.value?.pauseAllMedia()
-                    }
-                    // AUDIOFOCUS_GAIN: audio focus returned; let the user resume manually
-                    // to avoid unexpected auto-play after e.g. a phone call.
-                }
-            }
-            .build()
-
-        focusAudioManager.requestAudioFocus(focusRequest)
-
-        onDispose {
-            focusAudioManager.abandonAudioFocusRequest(focusRequest)
-        }
-    }
+    // Chromium owns audio focus for its media output. A second native focus
+    // request loses focus to WebView itself and would pause our own playback.
 
     // Keep the play/pause icon and liked state in sync with the actual player state; also
     // push current track metadata to the media notification.
