@@ -60,12 +60,12 @@ jobs:
             echo "${major}.${minor}.$((10#$patch + 1))"
           }
 
-          # Read version from Groovy build.gradle
-          current_version=$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -n1)
-          current_version_code=$(sed -n 's/.*versionCode \([0-9][0-9]*\).*/\1/p' app/build.gradle | head -n1)
+          # Read version from the Kotlin Gradle build file.
+          current_version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -n1)
+          current_version_code=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n1)
 
           if [ -z "$current_version" ] || [ -z "$current_version_code" ]; then
-            echo "Could not read versionName/versionCode from app/build.gradle"
+            echo "Could not read versionName/versionCode from app/build.gradle.kts"
             exit 1
           fi
 
@@ -124,8 +124,8 @@ jobs:
       - name: Update app version for this build
         shell: bash
         run: |
-          perl -0pi -e 's/versionCode \d+/versionCode $ENV{RELEASE_VERSION_CODE}/' app/build.gradle
-          perl -0pi -e 's/versionName ".*?"/versionName "$ENV{RELEASE_VERSION}"/' app/build.gradle
+          perl -0pi -e 's/versionCode = \d+/versionCode = $ENV{RELEASE_VERSION_CODE}/' app/build.gradle.kts
+          perl -0pi -e 's/versionName = ".*?"/versionName = "$ENV{RELEASE_VERSION}"/' app/build.gradle.kts
         env:
           RELEASE_VERSION: ${{ needs.detect_release_need.outputs.release_version }}
           RELEASE_VERSION_CODE: ${{ needs.detect_release_need.outputs.release_version_code }}
@@ -161,27 +161,19 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      - name: Validate Spotify credentials
-        shell: bash
-        run: test -n "$SPOTIFY_CLIENT_ID"
-        env:
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
-
       - name: Build release APK
         run: ./gradlew --no-daemon assembleRelease
-        env:
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
 
       - name: Rename APK
         run: |
           cp app/build/outputs/apk/release/app-release.apk \
-             app/build/outputs/apk/release/SPP-${{ needs.detect_release_need.outputs.release_tag }}.apk
+             app/build/outputs/apk/release/Tuneveil-${{ needs.detect_release_need.outputs.release_tag }}.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
-          path: app/build/outputs/apk/release/SPP-${{ needs.detect_release_need.outputs.release_tag }}.apk
+          path: app/build/outputs/apk/release/Tuneveil-${{ needs.detect_release_need.outputs.release_tag }}.apk
 
   publish_release:
     needs:
@@ -202,10 +194,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.detect_release_need.outputs.release_tag }}
-          name: SPP ${{ needs.detect_release_need.outputs.release_tag }}
+          name: Tuneveil ${{ needs.detect_release_need.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            release-artifacts/SPP-${{ needs.detect_release_need.outputs.release_tag }}.apk
+            release-artifacts/Tuneveil-${{ needs.detect_release_need.outputs.release_tag }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
